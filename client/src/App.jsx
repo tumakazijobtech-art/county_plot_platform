@@ -86,9 +86,13 @@ function normalizeCatalog(items = []) {
 
 function FitMap({ points, maxZoom = 6 }) {
   const map = useMap()
+  // Leaflet should fit the map when the dataset changes, not when a user
+  // selects a different marker or plot. The array is recreated during
+  // renders, so use a value-based key instead of the array reference.
+  const pointsKey = useMemo(() => points.map(([lat, lng]) => `${lat}:${lng}`).join('|'), [points])
   useEffect(() => {
     if (points.length) map.fitBounds(points, { padding: [25, 25], maxZoom })
-  }, [map, points, maxZoom])
+  }, [map, pointsKey, maxZoom])
   return null
 }
 
@@ -527,11 +531,6 @@ export default function App() {
     }
   }, [flash])
 
-  const openScanner = () => {
-    setVerifiedPermit(null)
-    setView('scanner')
-  }
-
   const reset = async () => {
     setSelectedShowground(null)
     setSelectedPlot(null)
@@ -584,7 +583,7 @@ export default function App() {
         </div>
         <header className="top">
           <div><h1>County Showgrounds</h1><p>Exhibitor plot booking</p></div>
-          <div className="top-actions"><button className="btn secondary scan-button" onClick={openScanner}><ScanLine size={15} /> Scan permit</button><div className="brand-logo" aria-label="County Showgrounds seal"><Leaf size={39} strokeWidth={1.4} /></div></div>
+          <div className="top-actions"><div className="brand-logo" aria-label="County Showgrounds seal"><Leaf size={39} strokeWidth={1.4} /></div></div>
         </header>
         <Stepper current={currentStep} />
         {notice && <div className={`toast ${notice.tone}`}><span className="toast-dot" />{notice.message}</div>}
