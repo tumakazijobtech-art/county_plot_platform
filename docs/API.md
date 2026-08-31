@@ -27,7 +27,16 @@ Admin routes require `Authorization: Bearer <session-token>`. Tokens are issued 
 - `GET /api/admin/auth/me`
 - `GET /api/admin/dashboard`
 - `GET /api/admin/showgrounds`
+- `POST /api/admin/showgrounds`
 - `PUT /api/admin/showgrounds/:showgroundId`
+- `DELETE /api/admin/showgrounds/:showgroundId`
+- `POST /api/admin/showgrounds/:showgroundId/plots`
+- `PUT /api/admin/showgrounds/:showgroundId/plots/:plotId`
+- `DELETE /api/admin/showgrounds/:showgroundId/plots/:plotId`
+- `GET /api/admin/managers`
+- `POST /api/admin/managers`
+- `PUT /api/admin/managers/:managerId`
+- `DELETE /api/admin/managers/:managerId`
 - `GET /api/admin/bookings`
 - `PATCH /api/admin/bookings/:bookingId/approval`
 - `GET /api/admin/visitors`
@@ -38,6 +47,8 @@ Admin routes require `Authorization: Bearer <session-token>`. Tokens are issued 
 - `PUT /api/admin/settings`
 
 `POST /api/admin/visitors/scan` accepts a `permitRef` or an existing `visitorId`, plus `action` set to `check_in` or `check_out`. Password reset email delivery uses Brevo when `BREVO_API_KEY` is configured; demo mode exposes the reset link for local testing.
+
+The primary `admin` role has full CRUD access to showgrounds, plots, managers, visitor approvals, branding, and theme colors. A `manager` account is assigned one or more showground IDs and receives read-only, server-enforced access to only those showgrounds and their related bookings/visitors.
 
 ## Booking creation body
 

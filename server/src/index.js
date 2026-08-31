@@ -49,9 +49,33 @@ const passwordMatches = async (password, storedHash) => {
   return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer)
 }
 
-const publicAdmin = (admin) => ({ id: admin._id.toString(), email: admin.email, name: admin.name, role: admin.role })
+const publicAdmin = (admin) => ({ id: admin._id.toString(), email: admin.email, name: admin.name, role: admin.role, showgroundIds: admin.showgroundIds || [] })
+const defaultThemeColors = { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' }
+const defaultPublicSettings = { key: 'primary', siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: defaultThemeColors }
+const isHexColor = (value) => /^#[0-9a-fA-F]{6}$/.test(String(value || ''))
+const isSuperAdmin = (admin) => admin?.role === 'admin'
+const groundScope = (admin) => isSuperAdmin(admin) ? {} : { id: { $in: admin?.showgroundIds || [] } }
+const bookingScope = (admin) => isSuperAdmin(admin) ? {} : { showgroundId: { $in: admin?.showgroundIds || [] } }
+const visitorScope = (admin) => isSuperAdmin(admin) ? {} : { showgroundId: { $in: admin?.showgroundIds || [] } }
+const requireSuperAdmin = (req, res, next) => {
+  if (!isSuperAdmin(req.admin)) return next(httpError(403, 'Only the primary administrator can perform this action.', 'ADMIN_FORBIDDEN'))
+  return next()
+}
+const slugify = (value) => String(value || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60)
+const cleanPlot = (plot = {}, fallbackId = '') => ({
+  id: String(plot.id || fallbackId).trim(),
+  category: String(plot.category || 'Open ground').trim().slice(0, 100),
+  size: String(plot.size || '3x3m').trim().slice(0, 30),
+  price: Number(plot.price || 0),
+  status: ['available', 'reserved', 'taken'].includes(plot.status) ? plot.status : 'available',
+  exhibitorsCapacity: Math.max(1, Number(plot.exhibitorsCapacity ?? plot.exhibitors_capacity ?? 1)),
+  traffic: ['high', 'medium', 'low'].includes(plot.traffic) ? plot.traffic : 'medium',
+  offsetN: Number(plot.offsetN || 0),
+  offsetE: Number(plot.offsetE || 0)
+})
 const publicVisitor = (visitor) => ({
   id: visitor._id.toString(),
+  showgroundId: visitor.showgroundId,
   fullName: visitor.fullName,
   phone: visitor.phone,
   permitRef: visitor.permitRef,
@@ -204,7 +228,7 @@ app.get('/api/showgrounds/:id', asyncRoute(async (req, res) => {
 
 app.get('/api/settings', asyncRoute(async (req, res) => {
   const settings = await SiteSettings.findOne({ key: 'primary' }).lean()
-  res.json({ settings: settings || { siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '' } })
+  res.json({ settings: settings || defaultPublicSettings })
 }))
 
 app.post('/api/admin/auth/login', asyncRoute(async (req, res) => {
@@ -248,6 +272,53 @@ app.post('/api/admin/auth/reset-password', asyncRoute(async (req, res) => {
 
 app.get('/api/admin/auth/me', requireAdmin, asyncRoute(async (req, res) => {
   res.json({ admin: publicAdmin(req.admin) })
+}))
+
+app.get('/api/admin/managers', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const managers = await AdminUser.find({ role: 'manager' }).select('-passwordHash').sort({ name: 1 }).lean()
+  res.json({ managers: managers.map(publicAdmin) })
+}))
+
+app.post('/api/admin/managers', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const email = cleanEmail(req.body.email)
+  const name = String(req.body.name || '').trim()
+  const password = String(req.body.password || '')
+  const showgroundIds = Array.isArray(req.body.showgroundIds) ? [...new Set(req.body.showgroundIds.map((id) => String(id).trim()).filter(Boolean))] : []
+  if (!email || !name || password.length < 8 || !showgroundIds.length) throw httpError(400, 'Name, email, password, and at least one showground are required.', 'VALIDATION_ERROR')
+  const validGrounds = await Showground.countDocuments({ id: { $in: showgroundIds } })
+  if (validGrounds !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
+  if (await AdminUser.exists({ email })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
+  const manager = await AdminUser.create({ email, name, passwordHash: await passwordHash(password), role: 'manager', showgroundIds })
+  res.status(201).json({ manager: publicAdmin(manager) })
+}))
+
+app.put('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw httpError(400, 'Invalid manager ID.', 'INVALID_ID')
+  const manager = await AdminUser.findOne({ _id: req.params.id, role: 'manager' })
+  if (!manager) throw httpError(404, 'Manager not found.', 'NOT_FOUND')
+  const email = cleanEmail(req.body.email)
+  const name = String(req.body.name || '').trim()
+  const showgroundIds = Array.isArray(req.body.showgroundIds) ? [...new Set(req.body.showgroundIds.map((id) => String(id).trim()).filter(Boolean))] : []
+  if (!email || !name || !showgroundIds.length) throw httpError(400, 'Name, email, and at least one showground are required.', 'VALIDATION_ERROR')
+  if (await AdminUser.exists({ email, _id: { $ne: manager._id } })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
+  if (await Showground.countDocuments({ id: { $in: showgroundIds } }) !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
+  manager.email = email
+  manager.name = name
+  manager.showgroundIds = showgroundIds
+  if (String(req.body.password || '')) {
+    if (String(req.body.password).length < 8) throw httpError(400, 'A new password must be at least 8 characters.', 'VALIDATION_ERROR')
+    manager.passwordHash = await passwordHash(req.body.password)
+  }
+  await manager.save()
+  res.json({ manager: publicAdmin(manager) })
+}))
+
+app.delete('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw httpError(400, 'Invalid manager ID.', 'INVALID_ID')
+  const manager = await AdminUser.findOneAndDelete({ _id: req.params.id, role: 'manager' })
+  if (!manager) throw httpError(404, 'Manager not found.', 'NOT_FOUND')
+  await AdminSession.deleteMany({ adminId: manager._id })
+  res.json({ ok: true, id: req.params.id })
 }))
 
 app.post('/api/otp/request', asyncRoute(async (req, res) => {
@@ -426,34 +497,41 @@ app.post('/api/inquiries', asyncRoute(async (req, res) => {
 
 app.get('/api/admin/dashboard', requireAdmin, asyncRoute(async (req, res) => {
   const [showgrounds, bookings, pendingBookings, visitors, pendingVisitors] = await Promise.all([
-    Showground.countDocuments(),
-    Booking.countDocuments(),
-    Booking.countDocuments({ approvalStatus: 'pending' }),
-    Visitor.countDocuments(),
-    Visitor.countDocuments({ status: 'pending' })
+    Showground.countDocuments(groundScope(req.admin)),
+    Booking.countDocuments(bookingScope(req.admin)),
+    Booking.countDocuments({ ...bookingScope(req.admin), approvalStatus: 'pending' }),
+    Visitor.countDocuments(visitorScope(req.admin)),
+    Visitor.countDocuments({ ...visitorScope(req.admin), status: 'pending' })
   ])
   res.json({ metrics: { showgrounds, bookings, pendingBookings, visitors, pendingVisitors } })
 }))
 
 app.get('/api/admin/showgrounds', requireAdmin, asyncRoute(async (req, res) => {
-  const showgrounds = await Showground.find({}).sort({ county: 1 }).lean()
+  const showgrounds = await Showground.find(groundScope(req.admin)).sort({ county: 1 }).lean()
   res.json({ showgrounds })
 }))
 
-app.put('/api/admin/showgrounds/:id', requireAdmin, asyncRoute(async (req, res) => {
+app.post('/api/admin/showgrounds', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const requestedId = slugify(req.body.id || req.body.name)
+  if (!requestedId || !String(req.body.name || '').trim() || !String(req.body.county || '').trim()) throw httpError(400, 'Showground ID, name, and county are required.', 'VALIDATION_ERROR')
+  const exists = await Showground.exists({ id: requestedId })
+  if (exists) throw httpError(409, 'A showground with that ID already exists.', 'DUPLICATE_ID')
+  const showground = await Showground.create({
+    id: requestedId,
+    name: String(req.body.name).trim(),
+    county: String(req.body.county).trim(),
+    lat: Number(req.body.lat || 0),
+    lng: Number(req.body.lng || 0),
+    season: req.body.season || {},
+    plots: []
+  })
+  res.status(201).json({ showground })
+}))
+
+app.put('/api/admin/showgrounds/:id', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   const { name, county, lat, lng, season, plots } = req.body
   if (!String(name || '').trim() || !String(county || '').trim()) throw httpError(400, 'Showground name and county are required.', 'VALIDATION_ERROR')
-  const cleanPlots = Array.isArray(plots) ? plots.map((plot) => ({
-    id: String(plot.id || '').trim(),
-    category: String(plot.category || 'Open ground').trim(),
-    size: String(plot.size || '3x3m').trim(),
-    price: Number(plot.price || 0),
-    status: ['available', 'reserved', 'taken'].includes(plot.status) ? plot.status : 'available',
-    exhibitorsCapacity: Math.max(1, Number(plot.exhibitorsCapacity ?? plot.exhibitors_capacity ?? 1)),
-    traffic: ['high', 'medium', 'low'].includes(plot.traffic) ? plot.traffic : 'medium',
-    offsetN: Number(plot.offsetN || 0),
-    offsetE: Number(plot.offsetE || 0)
-  })).filter((plot) => plot.id) : []
+  const cleanPlots = Array.isArray(plots) ? plots.map((plot) => cleanPlot(plot)).filter((plot) => plot.id) : []
   const updated = await Showground.findOneAndUpdate(
     { id: req.params.id },
     { $set: { name: String(name).trim(), county: String(county).trim(), lat: Number(lat), lng: Number(lng), season, plots: cleanPlots } },
@@ -463,13 +541,57 @@ app.put('/api/admin/showgrounds/:id', requireAdmin, asyncRoute(async (req, res) 
   res.json({ showground: updated })
 }))
 
+app.delete('/api/admin/showgrounds/:id', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const activeBooking = await Booking.exists({ showgroundId: req.params.id, status: { $nin: ['expired', 'failed', 'cancelled'] } })
+  if (activeBooking) throw httpError(409, 'This showground has active bookings and cannot be deleted.', 'SHOWGROUND_IN_USE')
+  const deleted = await Showground.findOneAndDelete({ id: req.params.id })
+  if (!deleted) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
+  await Visitor.deleteMany({ showgroundId: req.params.id })
+  res.json({ ok: true, id: req.params.id })
+}))
+
+app.post('/api/admin/showgrounds/:id/plots', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const plot = cleanPlot(req.body)
+  if (!plot.id) throw httpError(400, 'Plot ID is required.', 'VALIDATION_ERROR')
+  const updated = await Showground.findOneAndUpdate(
+    { id: req.params.id, 'plots.id': { $ne: plot.id } },
+    { $push: { plots: plot } },
+    { new: true, runValidators: true }
+  ).lean()
+  if (!updated) {
+    const ground = await Showground.exists({ id: req.params.id })
+    throw httpError(ground ? 409 : 404, ground ? 'That plot ID already exists.' : 'Showground not found.', ground ? 'DUPLICATE_PLOT' : 'NOT_FOUND')
+  }
+  res.status(201).json({ showground: updated })
+}))
+
+app.put('/api/admin/showgrounds/:id/plots/:plotId', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const plot = cleanPlot({ ...req.body, id: req.params.plotId }, req.params.plotId)
+  const updated = await Showground.findOneAndUpdate(
+    { id: req.params.id, 'plots.id': req.params.plotId },
+    { $set: { 'plots.$': plot } },
+    { new: true, runValidators: true }
+  ).lean()
+  if (!updated) throw httpError(404, 'Showground or plot not found.', 'NOT_FOUND')
+  res.json({ showground: updated })
+}))
+
+app.delete('/api/admin/showgrounds/:id/plots/:plotId', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const activeBooking = await Booking.exists({ showgroundId: req.params.id, plotId: req.params.plotId, status: { $nin: ['expired', 'failed', 'cancelled'] } })
+  if (activeBooking) throw httpError(409, 'This plot has an active booking and cannot be deleted.', 'PLOT_IN_USE')
+  const updated = await Showground.findOneAndUpdate({ id: req.params.id }, { $pull: { plots: { id: req.params.plotId } } }, { new: true }).lean()
+  if (!updated) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
+  res.json({ showground: updated })
+}))
+
 app.get('/api/admin/bookings', requireAdmin, asyncRoute(async (req, res) => {
   const filter = ['pending', 'approved', 'rejected'].includes(req.query.approvalStatus) ? { approvalStatus: req.query.approvalStatus } : {}
+  Object.assign(filter, bookingScope(req.admin))
   const bookings = await Booking.find(filter).sort({ createdAt: -1 }).limit(200).lean()
   res.json({ bookings: bookings.map((booking) => ({ ...publicBooking(booking), approvalStatus: booking.approvalStatus || 'approved' })) })
 }))
 
-app.patch('/api/admin/bookings/:id/approval', requireAdmin, asyncRoute(async (req, res) => {
+app.patch('/api/admin/bookings/:id/approval', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   const approvalStatus = String(req.body.approvalStatus || '')
   if (!['pending', 'approved', 'rejected'].includes(approvalStatus)) throw httpError(400, 'Choose pending, approved, or rejected.', 'VALIDATION_ERROR')
   const booking = await Booking.findById(req.params.id)
@@ -494,15 +616,19 @@ app.patch('/api/admin/bookings/:id/approval', requireAdmin, asyncRoute(async (re
 
 app.get('/api/admin/visitors', requireAdmin, asyncRoute(async (req, res) => {
   const filter = ['pending', 'approved', 'rejected', 'checked_in', 'checked_out'].includes(req.query.status) ? { status: req.query.status } : {}
+  Object.assign(filter, visitorScope(req.admin))
   const visitors = await Visitor.find(filter).sort({ visitDate: 1, createdAt: -1 }).limit(300).lean()
   res.json({ visitors: visitors.map(publicVisitor) })
 }))
 
-app.post('/api/admin/visitors', requireAdmin, asyncRoute(async (req, res) => {
+app.post('/api/admin/visitors', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   const fullName = String(req.body.fullName || '').trim()
   const visitDate = String(req.body.visitDate || '').trim()
-  if (!fullName || !visitDate) throw httpError(400, 'Visitor name and visit date are required.', 'VALIDATION_ERROR')
+  const showgroundId = String(req.body.showgroundId || '').trim()
+  if (!fullName || !visitDate || !showgroundId) throw httpError(400, 'Visitor name, showground, and visit date are required.', 'VALIDATION_ERROR')
+  if (!await Showground.exists({ id: showgroundId })) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
   const visitor = await Visitor.create({
+    showgroundId,
     fullName,
     phone: cleanPhone(req.body.phone || ''),
     permitRef: String(req.body.permitRef || '').trim(),
@@ -512,7 +638,7 @@ app.post('/api/admin/visitors', requireAdmin, asyncRoute(async (req, res) => {
   res.status(201).json({ visitor: publicVisitor(visitor) })
 }))
 
-app.patch('/api/admin/visitors/:id/approval', requireAdmin, asyncRoute(async (req, res) => {
+app.patch('/api/admin/visitors/:id/approval', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   const status = String(req.body.status || '')
   if (!['approved', 'rejected', 'pending'].includes(status)) throw httpError(400, 'Choose pending, approved, or rejected.', 'VALIDATION_ERROR')
   const update = { $set: { status } }
@@ -523,7 +649,7 @@ app.patch('/api/admin/visitors/:id/approval', requireAdmin, asyncRoute(async (re
   res.json({ visitor: publicVisitor(visitor) })
 }))
 
-app.post('/api/admin/visitors/scan', requireAdmin, asyncRoute(async (req, res) => {
+app.post('/api/admin/visitors/scan', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   const permitRef = String(req.body.permitRef || '').trim()
   const visitorId = String(req.body.visitorId || '').trim()
   const action = req.body.action === 'check_out' ? 'check_out' : 'check_in'
@@ -536,6 +662,7 @@ app.post('/api/admin/visitors/scan', requireAdmin, asyncRoute(async (req, res) =
       fullName: booking.exhibitorName,
       phone: booking.phone,
       permitRef,
+      showgroundId: booking.showgroundId,
       visitDate: new Date().toISOString().slice(0, 10),
       status: 'approved',
       approvedAt: new Date(),
@@ -551,17 +678,19 @@ app.post('/api/admin/visitors/scan', requireAdmin, asyncRoute(async (req, res) =
   res.json({ visitor: publicVisitor(visitor), message: action === 'check_in' ? 'Visitor checked in.' : 'Visitor checked out.' })
 }))
 
-app.get('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
+app.get('/api/admin/settings', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   const settings = await SiteSettings.findOne({ key: 'primary' }).lean()
-  res.json({ settings: settings || { key: 'primary', siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '' } })
+  res.json({ settings: settings || defaultPublicSettings })
 }))
 
-app.put('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
+app.put('/api/admin/settings', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   const logoUrl = String(req.body.logoUrl || '/county-showgrounds-logo.png').trim()
   if (logoUrl.length > 700000) throw httpError(413, 'The logo file is too large. Use an image under 500 KB.', 'LOGO_TOO_LARGE')
+  const requestedTheme = req.body.themeColors || {}
+  const themeColors = Object.fromEntries(Object.entries(defaultThemeColors).map(([key, fallback]) => [key, isHexColor(requestedTheme[key]) ? requestedTheme[key] : fallback]))
   const settings = await SiteSettings.findOneAndUpdate(
     { key: 'primary' },
-    { $set: { key: 'primary', siteName: String(req.body.siteName || 'County Showgrounds').trim().slice(0, 120), logoUrl, supportPhone: String(req.body.supportPhone || '').trim().slice(0, 30), updatedBy: req.admin._id } },
+    { $set: { key: 'primary', siteName: String(req.body.siteName || 'County Showgrounds').trim().slice(0, 120), logoUrl, supportPhone: String(req.body.supportPhone || '').trim().slice(0, 30), themeColors, updatedBy: req.admin._id } },
     { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
   ).lean()
   res.json({ settings })

@@ -83,6 +83,7 @@ const adminUserSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 120 },
   passwordHash: { type: String, required: true },
   role: { type: String, enum: ['admin', 'manager', 'gate'], default: 'admin' },
+  showgroundIds: { type: [String], default: [] },
   active: { type: Boolean, default: true }
 }, { timestamps: true, versionKey: false })
 
@@ -103,10 +104,18 @@ const siteSettingsSchema = new mongoose.Schema({
   siteName: { type: String, default: 'County Showgrounds', trim: true, maxlength: 120 },
   logoUrl: { type: String, default: '/county-showgrounds-logo.png', maxlength: 700000 },
   supportPhone: { type: String, default: '', trim: true, maxlength: 30 },
+  themeColors: {
+    primary: { type: String, default: '#2b4034', match: /^#[0-9a-fA-F]{6}$/ },
+    accent: { type: String, default: '#4c7a5d', match: /^#[0-9a-fA-F]{6}$/ },
+    background: { type: String, default: '#f2f4ee', match: /^#[0-9a-fA-F]{6}$/ },
+    surface: { type: String, default: '#ffffff', match: /^#[0-9a-fA-F]{6}$/ },
+    text: { type: String, default: '#232a22', match: /^#[0-9a-fA-F]{6}$/ }
+  },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser' }
 }, { timestamps: true, versionKey: false })
 
 const visitorSchema = new mongoose.Schema({
+  showgroundId: { type: String, index: true },
   fullName: { type: String, required: true, trim: true, maxlength: 120 },
   phone: { type: String, trim: true, maxlength: 20 },
   permitRef: { type: String, trim: true, index: true },

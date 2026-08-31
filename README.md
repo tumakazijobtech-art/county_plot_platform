@@ -16,7 +16,9 @@ County Plot Hub is a production-oriented MERN booking system for exhibitor plots
 - Branded permit screen with QR verification data and downloadable PDF.
 - Branded permits include a light originality watermark and PDF metadata.
 - Admin workspace at `/admin` for showground/plot leasing, booking approvals, visitor approval and gate scans.
-- Admin-controlled public logo and site name.
+- Full admin CRUD for showgrounds, plots, and individual showground manager accounts.
+- Admin-controlled public logo, lease-permit logo, site name, and theme colors.
+- Manager accounts are assigned specific showgrounds and are restricted server-side to read-only details for those locations.
 - Password login with secure reset links. Brevo's free sending allowance can be used for reset emails.
 - Demo mode so the full flow works before provider credentials are configured.
 - Deployment files for Vercel and Render.
@@ -36,7 +38,7 @@ npm run dev
 
 Open `http://localhost:5173`.
 
-Open `http://localhost:5173/admin` for the operations workspace. In demo mode the initial credentials come from `ADMIN_EMAIL` and `ADMIN_PASSWORD` (defaults are shown in `server/.env.example`); change them before production. Forgot-password links are logged and shown in the demo UI when no Brevo key is configured.
+Open `http://localhost:5173/admin` for the operations workspace. In demo mode the initial credentials come from `ADMIN_EMAIL` and `ADMIN_PASSWORD` (defaults are shown in `server/.env.example`); change them before production. The primary admin can create manager accounts, assign them one or more showgrounds, and remove or reassign them later. Forgot-password links are logged and shown in the demo UI when no Brevo key is configured.
 
 The default local configuration uses `DEMO_MODE=true`. In that mode OTP verification accepts the code displayed by the backend response, and a simulated M-Pesa callback confirms the booking after a short delay. This is deliberate: it makes the application testable without pretending that a payment has happened.
 

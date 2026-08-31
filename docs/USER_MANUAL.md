@@ -45,12 +45,13 @@ Select **Scan permit** in the header, allow camera access, and point the camera 
 
 ## For showground staff
 
-- Seed the initial catalog with `npm run seed`.
-- Update showgrounds and plots in MongoDB using the `Showground` collection.
-- Keep plot status values as `available`, `reserved`, or `taken`.
-- Do not manually mark a plot as `taken` until payment has been confirmed, unless correcting a record.
+- Open `/admin` and sign in with the primary administrator credentials.
+- Use **Land leasing** to create, edit, and delete showgrounds and to add, edit, or remove plots. A showground or plot with active bookings cannot be deleted.
+- Keep plot status values as `available`, `reserved`, or `taken`. Do not manually mark a plot as `taken` until payment has been confirmed, unless correcting a record.
+- Use **Managers** to create individual manager accounts and assign each account one or more showgrounds. Managers have read-only, server-enforced access to their assigned locations only.
+- Use **Logo & theme** to change the logo shown on the public booking flow and lease permits, plus the site's primary, accent, background, surface, and text colors.
 - Review `Booking` and `Payment` records together when reconciling M-Pesa.
-- Use the in-app **Scan permit** tool or `GET /api/permits/:permitRef` to verify a confirmed permit.
+- Use **Visitors & gate** to approve visitors and record QR/manual check-ins and check-outs.
 
 ## Demo mode
 

@@ -14,6 +14,11 @@ function formatMoney(value) {
   return `KES ${Number(value || 0).toLocaleString()}`
 }
 
+function hexToRgb(hex, fallback) {
+  const match = String(hex || '').match(/^#([0-9a-f]{6})$/i)
+  return match ? [1, 3, 5].map((index) => parseInt(match[1].slice(index - 1, index + 1), 16)) : fallback
+}
+
 function normalizePhone(value = '') {
   const raw = value.replace(/\s+/g, '')
   return raw.startsWith('+254') ? `0${raw.slice(4)}` : raw
@@ -308,7 +313,7 @@ function PublicApp() {
   const [showQuestion, setShowQuestion] = useState(false)
   const [permitQr, setPermitQr] = useState('')
   const [verifiedPermit, setVerifiedPermit] = useState(null)
-  const [siteSettings, setSiteSettings] = useState({ siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '' })
+  const [siteSettings, setSiteSettings] = useState({ siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' } })
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000)
@@ -355,7 +360,7 @@ function PublicApp() {
 
   const loadSiteSettings = useCallback(async () => {
     const result = await api('/api/settings')
-    setSiteSettings((current) => ({ ...current, ...(result.settings || {}) }))
+    setSiteSettings((current) => ({ ...current, ...(result.settings || {}), themeColors: { ...(current.themeColors || {}), ...(result.settings?.themeColors || {}) } }))
   }, [])
 
   useEffect(() => {
@@ -557,7 +562,7 @@ function PublicApp() {
   const downloadPermit = async () => {
     if (!booking || !selectedPlot || !selectedShowground) return
     const doc = new jsPDF()
-    const green = [43, 64, 52]; const amber = [185, 138, 62]; const ink = [35, 42, 34]; const soft = [91, 100, 89]; const border = [211, 216, 201]
+    const green = hexToRgb(siteSettings.themeColors?.primary, [43, 64, 52]); const amber = hexToRgb(siteSettings.themeColors?.accent, [185, 138, 62]); const ink = hexToRgb(siteSettings.themeColors?.text, [35, 42, 34]); const soft = [91, 100, 89]; const border = [211, 216, 201]
     doc.setFillColor(...green); doc.rect(0, 0, 210, 42, 'F')
     doc.setFillColor(...amber); doc.circle(26, 21, 10, 'F')
     try {
@@ -587,7 +592,7 @@ function PublicApp() {
   const detailPlot = selectedShowground?.plots.find((plot) => plot.id === selectedPlot?.id)
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={{ '--green': siteSettings.themeColors?.primary, '--green-soft': siteSettings.themeColors?.accent, '--bg': siteSettings.themeColors?.background, '--surface': siteSettings.themeColors?.surface, '--ink': siteSettings.themeColors?.text }}>
       <div className="wrap">
         <div className="datetime-bar">
             <span className="dt-date">{now.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
