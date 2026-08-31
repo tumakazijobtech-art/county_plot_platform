@@ -22,7 +22,7 @@ export const config = {
   talkSasa: {
     apiKey: process.env.TALKSASA_API_KEY,
     senderId: process.env.TALKSASA_SENDER_ID || 'COUNTYHUB',
-    apiUrl: process.env.TALKSASA_API_URL
+    apiUrl: process.env.TALKSASA_API_URL || 'https://bulksms.talksasa.com/api/v3/sms/send'
   }
 }
 

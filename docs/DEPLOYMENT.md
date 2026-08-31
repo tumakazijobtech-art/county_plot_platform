@@ -32,7 +32,7 @@ Talk Sasa:
 - `TALKSASA_SENDER_ID`
 - `TALKSASA_API_URL`
 
-The Talk Sasa URL is configurable because account plans can expose different API base URLs. The adapter sends a JSON request with `to`, `message`, and `sender_id`, and a bearer token. Confirm the exact endpoint/payload names for the Talk Sasa account before enabling production SMS.
+The Talk Sasa URL is configurable because account plans can expose different API endpoints. The standard SMS endpoint is `https://bulksms.talksasa.com/api/v3/sms/send`; the adapter sends JSON with `recipient`, `sender_id`, `type: "plain"`, and `message`, using a bearer token. Confirm the endpoint and sender ID for the Talk Sasa account before enabling production SMS.
 
 ## Vercel frontend
 
