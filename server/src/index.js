@@ -293,12 +293,6 @@ async function expireStaleBookings() {
 }
 
 assertProductionConfig()
-<<<<<<< HEAD
-await mongoose.connect(config.mongoUri)
-console.log(`MongoDB connected (${config.nodeEnv}; demo mode: ${config.demoMode})`)
-setInterval(() => expireStaleBookings().catch((error) => console.error('Expiry cleanup failed:', error.message)), 60 * 1000).unref()
-app.listen(config.port, () => console.log(`County Plot Hub API listening on port ${config.port}`))
-=======
 
 const httpServer = app.listen(config.port, () => {
   console.log(`County Plot Hub API listening on port ${config.port}`)
@@ -328,4 +322,3 @@ const shutdown = async () => {
 }
 process.once('SIGTERM', shutdown)
 process.once('SIGINT', shutdown)
->>>>>>> master
