@@ -281,12 +281,15 @@ function PermitScanner({ permit, onScan, onClose, busy }) {
   )
 }
 
+const SCANNER_PATH = '/scanner'
+
 export default function App() {
   const [now, setNow] = useState(() => new Date())
   const [showgrounds, setShowgrounds] = useState([])
   const [selectedShowground, setSelectedShowground] = useState(null)
   const [selectedPlot, setSelectedPlot] = useState(null)
-  const [view, setView] = useState('showground')
+  const [view, setView] = useState(() => (window.location.pathname === SCANNER_PATH ? 'scanner' : 'showground'))
+  const continueRef = useRef(null)
   const [filter, setFilter] = useState({ size: '', status: 'available', traffic: '' })
   const [form, setForm] = useState({ exhibitorName: '', phone: '', exhibitorCount: 1, powerNeed: 'none', signageText: '', setupDate: '', competitionOptIn: false })
   const [bookPage, setBookPage] = useState(1)
@@ -305,6 +308,34 @@ export default function App() {
     const timer = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  // Keep the URL in sync with the scanner view so it has its own linkable/bookmarkable address.
+  useEffect(() => {
+    const onScannerRoute = window.location.pathname === SCANNER_PATH
+    if (view === 'scanner' && !onScannerRoute) {
+      window.history.pushState({}, '', SCANNER_PATH)
+    } else if (view !== 'scanner' && onScannerRoute) {
+      window.history.replaceState({}, '', '/')
+    }
+  }, [view])
+
+  // Support the browser back/forward buttons for the scanner route.
+  useEffect(() => {
+    const onPopState = () => {
+      setView(window.location.pathname === SCANNER_PATH ? 'scanner' : 'showground')
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  // When a showground is picked (from the map or the option cards), bring the Continue button into view.
+  useEffect(() => {
+    if (view !== 'showground' || !selectedShowground) return
+    const frame = window.requestAnimationFrame(() => {
+      continueRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [selectedShowground, view])
 
   const flash = useCallback((message, tone = 'info') => {
     setNotice({ message, tone })
@@ -585,7 +616,7 @@ export default function App() {
                 )
               })}
             </div>
-            <div className="showground-continue">
+            <div className="showground-continue" ref={continueRef}>
               <div className="continue-note">{selectedShowground ? `Selected: ${selectedShowground.name}` : 'Choose a showground to continue'}</div>
               <button className="btn" disabled={!selectedShowground} onClick={() => setView('browse')}>Continue <ArrowRight size={16} /></button>
             </div>
