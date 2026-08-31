@@ -293,7 +293,39 @@ async function expireStaleBookings() {
 }
 
 assertProductionConfig()
+<<<<<<< HEAD
 await mongoose.connect(config.mongoUri)
 console.log(`MongoDB connected (${config.nodeEnv}; demo mode: ${config.demoMode})`)
 setInterval(() => expireStaleBookings().catch((error) => console.error('Expiry cleanup failed:', error.message)), 60 * 1000).unref()
 app.listen(config.port, () => console.log(`County Plot Hub API listening on port ${config.port}`))
+=======
+
+const httpServer = app.listen(config.port, () => {
+  console.log(`County Plot Hub API listening on port ${config.port}`)
+})
+
+async function connectDatabase() {
+  try {
+    await mongoose.connect(config.mongoUri, {
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000
+    })
+    console.log(`MongoDB connected (${config.nodeEnv}; demo mode: ${config.demoMode})`)
+  } catch (error) {
+    console.error(`MongoDB connection failed: ${error.message}`)
+    console.error('Retrying MongoDB connection in 15 seconds. Check Atlas Network Access, credentials, and MONGODB_URI.')
+    setTimeout(connectDatabase, 15000).unref()
+  }
+}
+
+connectDatabase()
+setInterval(() => expireStaleBookings().catch((error) => console.error('Expiry cleanup failed:', error.message)), 60 * 1000).unref()
+
+const shutdown = async () => {
+  httpServer.close()
+  await mongoose.disconnect().catch(() => {})
+  process.exit(0)
+}
+process.once('SIGTERM', shutdown)
+process.once('SIGINT', shutdown)
+>>>>>>> master
