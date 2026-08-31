@@ -14,6 +14,10 @@ County Plot Hub is a production-oriented MERN booking system for exhibitor plots
 - Talk Sasa SMS adapter for OTP, payment confirmation, and inquiries.
 - M-Pesa callback handling and idempotent payment updates.
 - Branded permit screen with QR verification data and downloadable PDF.
+- Branded permits include a light originality watermark and PDF metadata.
+- Admin workspace at `/admin` for showground/plot leasing, booking approvals, visitor approval and gate scans.
+- Admin-controlled public logo and site name.
+- Password login with secure reset links. Brevo's free sending allowance can be used for reset emails.
 - Demo mode so the full flow works before provider credentials are configured.
 - Deployment files for Vercel and Render.
 
@@ -32,6 +36,8 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+Open `http://localhost:5173/admin` for the operations workspace. In demo mode the initial credentials come from `ADMIN_EMAIL` and `ADMIN_PASSWORD` (defaults are shown in `server/.env.example`); change them before production. Forgot-password links are logged and shown in the demo UI when no Brevo key is configured.
+
 The default local configuration uses `DEMO_MODE=true`. In that mode OTP verification accepts the code displayed by the backend response, and a simulated M-Pesa callback confirms the booking after a short delay. This is deliberate: it makes the application testable without pretending that a payment has happened.
 
 ## Deployment
@@ -44,6 +50,7 @@ The default local configuration uses `DEMO_MODE=true`. In that mode OTP verifica
 6. Set `CLIENT_ORIGIN` in Render to the exact Vercel URL.
 7. Run `npm run seed` once with the production `MONGODB_URI`.
 8. Set `DEMO_MODE=false` only after Daraja and Talk Sasa credentials, callback routing, and a small live test have been verified.
+9. Configure `APP_ORIGIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `BREVO_API_KEY`, and `EMAIL_FROM` for admin access and password reset emails. Brevo's free plan is sufficient for low-volume operational emails.
 
 Do not put Daraja or Talk Sasa secrets in the Vercel frontend. Provider credentials belong only in Render environment variables.
 

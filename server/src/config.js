@@ -7,8 +7,20 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/county_plot_hub',
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  appOrigin: process.env.APP_ORIGIN || process.env.CLIENT_ORIGIN?.split(',')[0]?.trim() || 'http://localhost:5173',
   demoMode: asBoolean(process.env.DEMO_MODE, true),
   bookingHoldMinutes: Number(process.env.BOOKING_HOLD_MINUTES || 20),
+  admin: {
+    email: (process.env.ADMIN_EMAIL || 'admin@countyshowgrounds.test').toLowerCase(),
+    password: process.env.ADMIN_PASSWORD || 'ChangeMe123!',
+    name: process.env.ADMIN_NAME || 'County Showgrounds Admin'
+  },
+  email: {
+    provider: process.env.EMAIL_PROVIDER || 'brevo',
+    apiKey: process.env.BREVO_API_KEY,
+    fromEmail: process.env.EMAIL_FROM || 'no-reply@countyshowgrounds.test',
+    fromName: process.env.EMAIL_FROM_NAME || 'County Showgrounds'
+  },
   mpesa: {
     environment: process.env.MPESA_ENV || 'sandbox',
     consumerKey: process.env.MPESA_CONSUMER_KEY,

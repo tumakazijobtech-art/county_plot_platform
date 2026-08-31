@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, Check, CircleHelp, Clock3, Download, Leaf, MapPi
 import { jsPDF } from 'jspdf'
 import QRCode from 'qrcode'
 import { api } from './api'
+import AdminPortal from './AdminPortal'
 
 const steps = ['Showground', 'Browse', 'Map', 'Inquire', 'Book', 'Pay', 'Permit']
 const viewStep = { showground: 0, browse: 1, map: 2, book: 4, pay: 5, permit: 6, scanner: 6 }
@@ -287,7 +288,7 @@ function PermitScanner({ permit, onScan, onClose, busy }) {
 
 const SCANNER_PATH = '/scanner'
 
-export default function App() {
+function PublicApp() {
   const [now, setNow] = useState(() => new Date())
   const [showgrounds, setShowgrounds] = useState([])
   const [selectedShowground, setSelectedShowground] = useState(null)
@@ -307,6 +308,7 @@ export default function App() {
   const [showQuestion, setShowQuestion] = useState(false)
   const [permitQr, setPermitQr] = useState('')
   const [verifiedPermit, setVerifiedPermit] = useState(null)
+  const [siteSettings, setSiteSettings] = useState({ siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '' })
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000)
@@ -351,9 +353,16 @@ export default function App() {
     setShowgrounds(normalizeCatalog(result.showgrounds))
   }, [])
 
+  const loadSiteSettings = useCallback(async () => {
+    const result = await api('/api/settings')
+    setSiteSettings((current) => ({ ...current, ...(result.settings || {}) }))
+  }, [])
+
   useEffect(() => {
-    loadCatalog().catch((error) => flash(error.message || 'The live catalog could not be loaded.', 'error')).finally(() => setLoading(false))
-  }, [flash, loadCatalog])
+    Promise.all([loadCatalog(), loadSiteSettings()])
+      .catch((error) => flash(error.message || 'The live catalog could not be loaded.', 'error'))
+      .finally(() => setLoading(false))
+  }, [flash, loadCatalog, loadSiteSettings])
 
   useEffect(() => {
     if (!booking?.permitRef) return
@@ -552,13 +561,17 @@ export default function App() {
     doc.setFillColor(...green); doc.rect(0, 0, 210, 42, 'F')
     doc.setFillColor(...amber); doc.circle(26, 21, 10, 'F')
     try {
-      const logoDataUrl = await loadImageDataUrl('/county-showgrounds-logo.png')
+      const logoDataUrl = await loadImageDataUrl(siteSettings.logoUrl || '/county-showgrounds-logo.png')
       doc.addImage(logoDataUrl, 'PNG', 17, 12, 18, 18)
     } catch {
       doc.setTextColor(...green); doc.setFontSize(12); doc.text('CPH', 26, 25, { align: 'center' })
     }
-    doc.setTextColor(242, 244, 238); doc.setFontSize(9); doc.text('EXHIBITOR PLOT LEASE PERMIT', 42, 16); doc.setFontSize(20); doc.text('County Showgrounds', 42, 27); doc.setFontSize(9); doc.text(selectedShowground.name, 42, 35)
-    doc.setTextColor(...ink); doc.setFontSize(9); doc.text('PERMIT NO.', 20, 57); doc.setFontSize(14); doc.text(booking.permitRef || 'PENDING', 20, 66)
+    doc.setTextColor(242, 244, 238); doc.setFontSize(9); doc.text('EXHIBITOR PLOT LEASE PERMIT', 42, 16); doc.setFontSize(20); doc.text(siteSettings.siteName || 'County Showgrounds', 42, 27); doc.setFontSize(9); doc.text(selectedShowground.name, 42, 35)
+    doc.setProperties({ title: `${siteSettings.siteName || 'County Showgrounds'} permit ${booking.permitRef || 'PENDING'}`, subject: 'Original exhibitor plot lease permit', author: siteSettings.siteName || 'County Showgrounds', keywords: 'permit, county showgrounds, original' })
+    // A light, branded watermark is placed before the foreground content so
+    // the document remains readable while proving it came from this system.
+    doc.setTextColor(226, 230, 222); doc.setFontSize(27); doc.setFont('helvetica', 'bold'); doc.text(`ORIGINAL · ${(siteSettings.siteName || 'COUNTY SHOWGROUNDS').toUpperCase()}`, 105, 148, { align: 'center', angle: 35 })
+    doc.setTextColor(...ink); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.text('PERMIT NO.', 20, 57); doc.setFontSize(14); doc.text(booking.permitRef || 'PENDING', 20, 66)
     doc.setDrawColor(...border); doc.roundedRect(15, 76, 180, 88, 3, 3)
     const rows = [['Exhibitor', form.exhibitorName], ['Plot', selectedPlot.id], ['Category', selectedPlot.category], ['Stand size', selectedPlot.size], ['Setup date', form.setupDate || 'Not set'], ['Amount paid', formatMoney(booking.amount)]]
     let y = 88
@@ -582,8 +595,8 @@ export default function App() {
             <span className="dt-clock" aria-live="polite">{now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
         </div>
         <header className="top">
-          <div><h1>County Showgrounds</h1><p>Exhibitor plot booking</p></div>
-          <div className="top-actions"><div className="brand-logo" aria-label="County Showgrounds seal"><Leaf size={39} strokeWidth={1.4} /></div></div>
+          <div><h1>{siteSettings.siteName || 'County Showgrounds'}</h1><p>Exhibitor plot booking</p></div>
+          <div className="top-actions"><div className="brand-logo" aria-label={`${siteSettings.siteName || 'County Showgrounds'} logo`}>{siteSettings.logoUrl ? <img src={siteSettings.logoUrl} alt="" /> : <Leaf size={39} strokeWidth={1.4} />}</div></div>
         </header>
         <Stepper current={currentStep} />
         {notice && <div className={`toast ${notice.tone}`}><span className="toast-dot" />{notice.message}</div>}
@@ -682,12 +695,16 @@ export default function App() {
         )}
 
         {!loading && view === 'permit' && booking && selectedShowground && selectedPlot && (
-          <section><div className="permit-status-line"><Check size={18} /> Payment confirmed · permit issued</div><div className="permit-shell"><div className="permit"><div className="permit-letterhead"><div className="permit-logo">CPH</div><div><small>EXHIBITOR PLOT LEASE PERMIT</small><h2>County Showgrounds</h2><span>{selectedShowground.name} · {selectedShowground.county}</span></div><strong><Ticket size={13} /> {booking.permitRef}</strong></div><div className="permit-body"><small>LEASE DETAILS</small>{[['Exhibitor', form.exhibitorName], ['Plot', selectedPlot.id], ['Category', selectedPlot.category], ['Stand size', selectedPlot.size], ['Setup date', form.setupDate || 'Not set'], ['Amount paid', formatMoney(booking.amount)]].map(([label, value]) => <div className="permit-row" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div><div className="permit-verify">{permitQr ? <img src={permitQr} alt="Permit QR code" /> : <RefreshCw className="spin" />}<p><strong>Scan to verify authenticity</strong><br />Permit {booking.permitRef} is registered in the county showgrounds register.</p></div><div className="permit-foot">Issued by County Showgrounds · Not transferable · Present with valid ID at the gate</div></div></div><div className="permit-actions"><button className="btn block" onClick={downloadPermit}><Download size={16} /> Download permit (PDF)</button><button className="btn secondary block" onClick={reset}>Book another plot</button></div></section>
+           <section><div className="permit-status-line"><Check size={18} /> Payment confirmed · permit issued</div><div className="permit-shell"><div className="permit"><div className="permit-letterhead"><div className="permit-logo">{siteSettings.logoUrl ? <img src={siteSettings.logoUrl} alt="" /> : 'CPH'}</div><div><small>EXHIBITOR PLOT LEASE PERMIT</small><h2>{siteSettings.siteName || 'County Showgrounds'}</h2><span>{selectedShowground.name} · {selectedShowground.county}</span></div><strong><Ticket size={13} /> {booking.permitRef}</strong></div><div className="permit-body"><small>LEASE DETAILS</small>{[['Exhibitor', form.exhibitorName], ['Plot', selectedPlot.id], ['Category', selectedPlot.category], ['Stand size', selectedPlot.size], ['Setup date', form.setupDate || 'Not set'], ['Amount paid', formatMoney(booking.amount)]].map(([label, value]) => <div className="permit-row" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div><div className="permit-verify">{permitQr ? <img src={permitQr} alt="Permit QR code" /> : <RefreshCw className="spin" />}<p><strong>Scan to verify authenticity</strong><br />Permit {booking.permitRef} is registered in the county showgrounds register.</p></div><div className="permit-foot">Issued by {siteSettings.siteName || 'County Showgrounds'} · Not transferable · Present with valid ID at the gate</div></div></div><div className="permit-actions"><button className="btn block" onClick={downloadPermit}><Download size={16} /> Download permit (PDF)</button><button className="btn secondary block" onClick={reset}>Book another plot</button></div></section>
         )}
       </div>
 
-      <footer><span><Leaf size={14} /> County Showgrounds</span><span>Live catalog · Secure booking</span></footer>
+       <footer><span>{siteSettings.logoUrl ? <img className="footer-logo" src={siteSettings.logoUrl} alt="" /> : <Leaf size={14} />} {siteSettings.siteName || 'County Showgrounds'}</span><span>Live catalog · Secure booking</span></footer>
       {showQuestion && <div className="modal-backdrop" onClick={() => setShowQuestion(false)}><div className="modal" onClick={(event) => event.stopPropagation()}><CircleHelp size={21} /><h3>Ask about plot {selectedPlot?.id}</h3><p className="muted">The showground team will reply to your phone number.</p><textarea rows="4" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="e.g. Is there shade cover on this plot?" /><div className="btn-row"><button className="btn secondary" onClick={() => setShowQuestion(false)}>Cancel</button><button className="btn" onClick={sendQuestion} disabled={busy}><Send size={15} /> Send question</button></div></div></div>}
     </div>
   )
+}
+
+export default function App() {
+  return window.location.pathname.startsWith('/admin') ? <AdminPortal /> : <PublicApp />
 }

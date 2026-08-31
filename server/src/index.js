@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit'
 import morgan from 'morgan'
 import mongoose from 'mongoose'
 import { config, assertProductionConfig } from './config.js'
-import { Booking, Inquiry, Otp, Payment, Showground } from './models.js'
+import { AdminSession, AdminUser, Booking, Inquiry, Otp, PasswordReset, Payment, Showground, SiteSettings, Visitor } from './models.js'
 import { initiateStkPush } from './providers/daraja.js'
 import { sendSms } from './providers/talksasa.js'
 
@@ -33,6 +33,76 @@ const newToken = () => crypto.randomBytes(24).toString('base64url')
 const cleanPhone = (value = '') => value.replace(/\s+/g, '')
 const validPhone = (value) => phonePattern.test(cleanPhone(value))
 const phoneForMpesa = (value) => cleanPhone(value).replace(/^\+/, '')
+const cleanEmail = (value = '') => String(value).trim().toLowerCase()
+const passwordHash = (password, salt = crypto.randomBytes(16).toString('hex')) => new Promise((resolve, reject) => {
+  crypto.scrypt(String(password), salt, 64, (error, derivedKey) => {
+    if (error) return reject(error)
+    resolve(`${salt}:${derivedKey.toString('hex')}`)
+  })
+})
+const passwordMatches = async (password, storedHash) => {
+  const [salt, expected] = String(storedHash || '').split(':')
+  if (!salt || !expected) return false
+  const actual = await passwordHash(password, salt)
+  const actualBuffer = Buffer.from(actual.split(':')[1], 'hex')
+  const expectedBuffer = Buffer.from(expected, 'hex')
+  return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+}
+
+const publicAdmin = (admin) => ({ id: admin._id.toString(), email: admin.email, name: admin.name, role: admin.role })
+const publicVisitor = (visitor) => ({
+  id: visitor._id.toString(),
+  fullName: visitor.fullName,
+  phone: visitor.phone,
+  permitRef: visitor.permitRef,
+  visitDate: visitor.visitDate,
+  status: visitor.status,
+  note: visitor.note,
+  approvedAt: visitor.approvedAt,
+  lastScannedAt: visitor.lastScannedAt,
+  createdAt: visitor.createdAt
+})
+
+async function sendPasswordResetEmail(admin, resetUrl) {
+  if (config.email.provider !== 'brevo' || !config.email.apiKey) {
+    if (!config.demoMode) throw httpError(503, 'Password reset email is not configured. Add a Brevo API key before using this in production.', 'EMAIL_NOT_CONFIGURED')
+    console.log(`Password reset link for ${admin.email}: ${resetUrl}`)
+    return { delivered: false, demo: true }
+  }
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'accept': 'application/json', 'api-key': config.email.apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      sender: { email: config.email.fromEmail, name: config.email.fromName },
+      to: [{ email: admin.email, name: admin.name }],
+      subject: 'Reset your County Showgrounds admin password',
+      htmlContent: `<div style="font-family:Arial,sans-serif;color:#232a22"><h2>Reset your admin password</h2><p>Use the secure link below to choose a new password. It expires in 30 minutes.</p><p><a href="${resetUrl}">Reset password</a></p><p>If you did not request this, you can ignore this email.</p></div>`
+    })
+  })
+  if (!response.ok) throw httpError(502, 'The password reset email could not be sent.', 'EMAIL_PROVIDER_ERROR')
+  return { delivered: true, demo: false }
+}
+
+async function ensureAdminUser() {
+  const email = cleanEmail(config.admin.email)
+  const existing = await AdminUser.findOne({ email })
+  if (existing) return existing
+  const created = await AdminUser.create({ email, name: config.admin.name, passwordHash: await passwordHash(config.admin.password), role: 'admin' })
+  console.log(`Created initial admin account ${email}. Change the password after first login.`)
+  return created
+}
+
+async function adminAuth(req, res, next) {
+  const authorization = String(req.headers.authorization || '')
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : ''
+  if (!token) return next(httpError(401, 'Admin login is required.', 'ADMIN_UNAUTHENTICATED'))
+  const session = await AdminSession.findOne({ tokenHash: sha256(token), expiresAt: { $gt: new Date() } }).populate('adminId')
+  if (!session?.adminId?.active) return next(httpError(401, 'Your admin session has expired. Please log in again.', 'ADMIN_SESSION_EXPIRED'))
+  req.admin = session.adminId
+  req.adminSession = session
+  return next()
+}
+const requireAdmin = (req, res, next) => adminAuth(req, res, next).catch(next)
 
 function seasonIsOpen(season, now = new Date()) {
   if (!season?.startMonth || !season?.endMonth) return true
@@ -59,6 +129,8 @@ function publicBooking(booking) {
     competitionOptIn: booking.competitionOptIn,
     amount: booking.amount,
     status: booking.status,
+    approvalStatus: booking.approvalStatus || 'approved',
+    approvalNote: booking.approvalNote,
     permitRef: booking.permitRef,
     expiresAt: booking.expiresAt,
     createdAt: booking.createdAt
@@ -128,6 +200,54 @@ app.get('/api/showgrounds/:id', asyncRoute(async (req, res) => {
   const showground = await Showground.findOne({ id: req.params.id }).lean()
   if (!showground) throw httpError(404, 'Showground not found', 'NOT_FOUND')
   res.json({ showground })
+}))
+
+app.get('/api/settings', asyncRoute(async (req, res) => {
+  const settings = await SiteSettings.findOne({ key: 'primary' }).lean()
+  res.json({ settings: settings || { siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '' } })
+}))
+
+app.post('/api/admin/auth/login', asyncRoute(async (req, res) => {
+  const email = cleanEmail(req.body.email)
+  const password = String(req.body.password || '')
+  if (!email || !password) throw httpError(400, 'Email and password are required.', 'LOGIN_REQUIRED')
+  const admin = await AdminUser.findOne({ email, active: true })
+  if (!admin || !(await passwordMatches(password, admin.passwordHash))) throw httpError(401, 'The email or password is incorrect.', 'LOGIN_INVALID')
+  const token = newToken()
+  await AdminSession.create({ adminId: admin._id, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000) })
+  res.json({ token, admin: publicAdmin(admin) })
+}))
+
+app.post('/api/admin/auth/forgot-password', asyncRoute(async (req, res) => {
+  const email = cleanEmail(req.body.email)
+  const generic = { ok: true, message: 'If an admin account exists for that email, a reset link has been sent.' }
+  const admin = await AdminUser.findOne({ email, active: true })
+  if (!admin) return res.json(generic)
+  await PasswordReset.deleteMany({ adminId: admin._id })
+  const token = newToken()
+  await PasswordReset.create({ adminId: admin._id, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 30 * 60 * 1000) })
+  const resetUrl = `${config.appOrigin}/admin/reset-password?token=${encodeURIComponent(token)}`
+  const delivery = await sendPasswordResetEmail(admin, resetUrl)
+  res.json({ ...generic, ...(config.demoMode || delivery.demo ? { resetUrl } : {}) })
+}))
+
+app.post('/api/admin/auth/reset-password', asyncRoute(async (req, res) => {
+  const token = String(req.body.token || '').trim()
+  const password = String(req.body.password || '')
+  if (!token || password.length < 8) throw httpError(400, 'Use a reset link and a password of at least 8 characters.', 'RESET_INVALID')
+  const reset = await PasswordReset.findOne({ tokenHash: sha256(token), expiresAt: { $gt: new Date() } })
+  if (!reset) throw httpError(400, 'This reset link is invalid or has expired.', 'RESET_EXPIRED')
+  const admin = await AdminUser.findById(reset.adminId)
+  if (!admin) throw httpError(400, 'This reset link is invalid or has expired.', 'RESET_EXPIRED')
+  admin.passwordHash = await passwordHash(password)
+  await admin.save()
+  await PasswordReset.deleteMany({ adminId: admin._id })
+  await AdminSession.deleteMany({ adminId: admin._id })
+  res.json({ ok: true, message: 'Password updated. You can now log in.' })
+}))
+
+app.get('/api/admin/auth/me', requireAdmin, asyncRoute(async (req, res) => {
+  res.json({ admin: publicAdmin(req.admin) })
 }))
 
 app.post('/api/otp/request', asyncRoute(async (req, res) => {
@@ -304,6 +424,149 @@ app.post('/api/inquiries', asyncRoute(async (req, res) => {
   res.status(201).json({ ok: true, inquiry: { id: inquiry._id.toString(), status: inquiry.status } })
 }))
 
+app.get('/api/admin/dashboard', requireAdmin, asyncRoute(async (req, res) => {
+  const [showgrounds, bookings, pendingBookings, visitors, pendingVisitors] = await Promise.all([
+    Showground.countDocuments(),
+    Booking.countDocuments(),
+    Booking.countDocuments({ approvalStatus: 'pending' }),
+    Visitor.countDocuments(),
+    Visitor.countDocuments({ status: 'pending' })
+  ])
+  res.json({ metrics: { showgrounds, bookings, pendingBookings, visitors, pendingVisitors } })
+}))
+
+app.get('/api/admin/showgrounds', requireAdmin, asyncRoute(async (req, res) => {
+  const showgrounds = await Showground.find({}).sort({ county: 1 }).lean()
+  res.json({ showgrounds })
+}))
+
+app.put('/api/admin/showgrounds/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const { name, county, lat, lng, season, plots } = req.body
+  if (!String(name || '').trim() || !String(county || '').trim()) throw httpError(400, 'Showground name and county are required.', 'VALIDATION_ERROR')
+  const cleanPlots = Array.isArray(plots) ? plots.map((plot) => ({
+    id: String(plot.id || '').trim(),
+    category: String(plot.category || 'Open ground').trim(),
+    size: String(plot.size || '3x3m').trim(),
+    price: Number(plot.price || 0),
+    status: ['available', 'reserved', 'taken'].includes(plot.status) ? plot.status : 'available',
+    exhibitorsCapacity: Math.max(1, Number(plot.exhibitorsCapacity ?? plot.exhibitors_capacity ?? 1)),
+    traffic: ['high', 'medium', 'low'].includes(plot.traffic) ? plot.traffic : 'medium',
+    offsetN: Number(plot.offsetN || 0),
+    offsetE: Number(plot.offsetE || 0)
+  })).filter((plot) => plot.id) : []
+  const updated = await Showground.findOneAndUpdate(
+    { id: req.params.id },
+    { $set: { name: String(name).trim(), county: String(county).trim(), lat: Number(lat), lng: Number(lng), season, plots: cleanPlots } },
+    { new: true, runValidators: true }
+  ).lean()
+  if (!updated) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
+  res.json({ showground: updated })
+}))
+
+app.get('/api/admin/bookings', requireAdmin, asyncRoute(async (req, res) => {
+  const filter = ['pending', 'approved', 'rejected'].includes(req.query.approvalStatus) ? { approvalStatus: req.query.approvalStatus } : {}
+  const bookings = await Booking.find(filter).sort({ createdAt: -1 }).limit(200).lean()
+  res.json({ bookings: bookings.map((booking) => ({ ...publicBooking(booking), approvalStatus: booking.approvalStatus || 'approved' })) })
+}))
+
+app.patch('/api/admin/bookings/:id/approval', requireAdmin, asyncRoute(async (req, res) => {
+  const approvalStatus = String(req.body.approvalStatus || '')
+  if (!['pending', 'approved', 'rejected'].includes(approvalStatus)) throw httpError(400, 'Choose pending, approved, or rejected.', 'VALIDATION_ERROR')
+  const booking = await Booking.findById(req.params.id)
+  if (!booking) throw httpError(404, 'Booking not found.', 'NOT_FOUND')
+  if (approvalStatus === 'rejected' && ['confirmed', 'cancelled'].includes(booking.status)) throw httpError(409, 'A confirmed or cancelled booking cannot be rejected.', 'BOOKING_LOCKED')
+  booking.approvalStatus = approvalStatus
+  booking.approvalNote = String(req.body.approvalNote || '').trim().slice(0, 500)
+  if (approvalStatus === 'pending') {
+    booking.approvedAt = undefined
+    booking.approvedBy = undefined
+  } else {
+    booking.approvedAt = new Date()
+    booking.approvedBy = req.admin._id
+  }
+  if (approvalStatus === 'rejected') {
+    booking.status = 'cancelled'
+    await releasePlot(booking)
+  }
+  await booking.save()
+  res.json({ booking: publicBooking(booking) })
+}))
+
+app.get('/api/admin/visitors', requireAdmin, asyncRoute(async (req, res) => {
+  const filter = ['pending', 'approved', 'rejected', 'checked_in', 'checked_out'].includes(req.query.status) ? { status: req.query.status } : {}
+  const visitors = await Visitor.find(filter).sort({ visitDate: 1, createdAt: -1 }).limit(300).lean()
+  res.json({ visitors: visitors.map(publicVisitor) })
+}))
+
+app.post('/api/admin/visitors', requireAdmin, asyncRoute(async (req, res) => {
+  const fullName = String(req.body.fullName || '').trim()
+  const visitDate = String(req.body.visitDate || '').trim()
+  if (!fullName || !visitDate) throw httpError(400, 'Visitor name and visit date are required.', 'VALIDATION_ERROR')
+  const visitor = await Visitor.create({
+    fullName,
+    phone: cleanPhone(req.body.phone || ''),
+    permitRef: String(req.body.permitRef || '').trim(),
+    visitDate,
+    note: String(req.body.note || '').trim().slice(0, 500)
+  })
+  res.status(201).json({ visitor: publicVisitor(visitor) })
+}))
+
+app.patch('/api/admin/visitors/:id/approval', requireAdmin, asyncRoute(async (req, res) => {
+  const status = String(req.body.status || '')
+  if (!['approved', 'rejected', 'pending'].includes(status)) throw httpError(400, 'Choose pending, approved, or rejected.', 'VALIDATION_ERROR')
+  const update = { $set: { status } }
+  if (status === 'pending') update.$unset = { approvedAt: 1, approvedBy: 1 }
+  else Object.assign(update.$set, { approvedAt: new Date(), approvedBy: req.admin._id })
+  const visitor = await Visitor.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true })
+  if (!visitor) throw httpError(404, 'Visitor not found.', 'NOT_FOUND')
+  res.json({ visitor: publicVisitor(visitor) })
+}))
+
+app.post('/api/admin/visitors/scan', requireAdmin, asyncRoute(async (req, res) => {
+  const permitRef = String(req.body.permitRef || '').trim()
+  const visitorId = String(req.body.visitorId || '').trim()
+  const action = req.body.action === 'check_out' ? 'check_out' : 'check_in'
+  let visitor = visitorId && mongoose.isValidObjectId(visitorId) ? await Visitor.findById(visitorId) : null
+  if (!visitor && permitRef) visitor = await Visitor.findOne({ permitRef }).sort({ createdAt: -1 })
+  if (!visitor && permitRef) {
+    const booking = await Booking.findOne({ permitRef, status: 'confirmed' }).lean()
+    if (!booking) throw httpError(404, 'No confirmed permit was found for that QR code.', 'PERMIT_NOT_FOUND')
+    visitor = await Visitor.create({
+      fullName: booking.exhibitorName,
+      phone: booking.phone,
+      permitRef,
+      visitDate: new Date().toISOString().slice(0, 10),
+      status: 'approved',
+      approvedAt: new Date(),
+      approvedBy: req.admin._id
+    })
+  }
+  if (!visitor) throw httpError(404, 'Visitor or permit not found.', 'VISITOR_NOT_FOUND')
+  if (action === 'check_in' && visitor.status === 'rejected') throw httpError(409, 'This visitor is not approved for entry.', 'VISITOR_REJECTED')
+  visitor.status = action === 'check_in' ? 'checked_in' : 'checked_out'
+  visitor.lastScannedAt = new Date()
+  visitor.scanEvents.push({ action, scannedAt: visitor.lastScannedAt, scannedBy: req.admin._id })
+  await visitor.save()
+  res.json({ visitor: publicVisitor(visitor), message: action === 'check_in' ? 'Visitor checked in.' : 'Visitor checked out.' })
+}))
+
+app.get('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
+  const settings = await SiteSettings.findOne({ key: 'primary' }).lean()
+  res.json({ settings: settings || { key: 'primary', siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '' } })
+}))
+
+app.put('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
+  const logoUrl = String(req.body.logoUrl || '/county-showgrounds-logo.png').trim()
+  if (logoUrl.length > 700000) throw httpError(413, 'The logo file is too large. Use an image under 500 KB.', 'LOGO_TOO_LARGE')
+  const settings = await SiteSettings.findOneAndUpdate(
+    { key: 'primary' },
+    { $set: { key: 'primary', siteName: String(req.body.siteName || 'County Showgrounds').trim().slice(0, 120), logoUrl, supportPhone: String(req.body.supportPhone || '').trim().slice(0, 30), updatedBy: req.admin._id } },
+    { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+  ).lean()
+  res.json({ settings })
+}))
+
 app.use((error, req, res, next) => {
   console.error(error)
   const status = error.status || (error.name === 'ValidationError' ? 400 : 500)
@@ -332,6 +595,7 @@ async function connectDatabase() {
       connectTimeoutMS: 10000
     })
     console.log(`MongoDB connected (${config.nodeEnv}; demo mode: ${config.demoMode})`)
+    await ensureAdminUser()
   } catch (error) {
     console.error(`MongoDB connection failed: ${error.message}`)
     console.error('Retrying MongoDB connection in 15 seconds. Check Atlas Network Access, credentials, and MONGODB_URI.')

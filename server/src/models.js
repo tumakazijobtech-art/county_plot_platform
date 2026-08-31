@@ -46,6 +46,10 @@ const bookingSchema = new mongoose.Schema({
   competitionOptIn: { type: Boolean, default: false },
   amount: { type: Number, required: true, min: 0 },
   status: { type: String, enum: ['reserved', 'pending_payment', 'confirmed', 'failed', 'expired', 'cancelled'], default: 'reserved', index: true },
+  approvalStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'approved', index: true },
+  approvalNote: { type: String, trim: true, maxlength: 500 },
+  approvedAt: Date,
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser' },
   permitRef: { type: String, unique: true, sparse: true },
   expiresAt: { type: Date, index: true },
   lastPaymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' }
@@ -74,8 +78,58 @@ const inquirySchema = new mongoose.Schema({
   status: { type: String, enum: ['new', 'replied', 'closed'], default: 'new' }
 }, { timestamps: true, versionKey: false })
 
+const adminUserSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
+  name: { type: String, required: true, trim: true, maxlength: 120 },
+  passwordHash: { type: String, required: true },
+  role: { type: String, enum: ['admin', 'manager', 'gate'], default: 'admin' },
+  active: { type: Boolean, default: true }
+}, { timestamps: true, versionKey: false })
+
+const adminSessionSchema = new mongoose.Schema({
+  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser', required: true, index: true },
+  tokenHash: { type: String, required: true, unique: true, index: true },
+  expiresAt: { type: Date, required: true, index: { expires: 0 } }
+}, { timestamps: true, versionKey: false })
+
+const passwordResetSchema = new mongoose.Schema({
+  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser', required: true, index: true },
+  tokenHash: { type: String, required: true, unique: true, index: true },
+  expiresAt: { type: Date, required: true, index: { expires: 0 } }
+}, { timestamps: true, versionKey: false })
+
+const siteSettingsSchema = new mongoose.Schema({
+  key: { type: String, unique: true, default: 'primary' },
+  siteName: { type: String, default: 'County Showgrounds', trim: true, maxlength: 120 },
+  logoUrl: { type: String, default: '/county-showgrounds-logo.png', maxlength: 700000 },
+  supportPhone: { type: String, default: '', trim: true, maxlength: 30 },
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser' }
+}, { timestamps: true, versionKey: false })
+
+const visitorSchema = new mongoose.Schema({
+  fullName: { type: String, required: true, trim: true, maxlength: 120 },
+  phone: { type: String, trim: true, maxlength: 20 },
+  permitRef: { type: String, trim: true, index: true },
+  visitDate: { type: String, required: true },
+  status: { type: String, enum: ['pending', 'approved', 'rejected', 'checked_in', 'checked_out'], default: 'pending', index: true },
+  note: { type: String, trim: true, maxlength: 500 },
+  approvedAt: Date,
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser' },
+  lastScannedAt: Date,
+  scanEvents: [{
+    action: { type: String, enum: ['check_in', 'check_out'] },
+    scannedAt: { type: Date, default: Date.now },
+    scannedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser' }
+  }]
+}, { timestamps: true, versionKey: false })
+
 export const Showground = mongoose.model('Showground', showgroundSchema)
 export const Otp = mongoose.model('Otp', otpSchema)
 export const Booking = mongoose.model('Booking', bookingSchema)
 export const Payment = mongoose.model('Payment', paymentSchema)
 export const Inquiry = mongoose.model('Inquiry', inquirySchema)
+export const AdminUser = mongoose.model('AdminUser', adminUserSchema)
+export const AdminSession = mongoose.model('AdminSession', adminSessionSchema)
+export const PasswordReset = mongoose.model('PasswordReset', passwordResetSchema)
+export const SiteSettings = mongoose.model('SiteSettings', siteSettingsSchema)
+export const Visitor = mongoose.model('Visitor', visitorSchema)
