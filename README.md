@@ -18,6 +18,7 @@ County Plot Hub is a production-oriented MERN booking system for exhibitor plots
 - Admin workspace at `/admin` for showground/plot leasing, booking approvals, visitor approval and gate scans.
 - Full admin CRUD for showgrounds, plots, and individual showground manager accounts.
 - Admin-controlled public logo, lease-permit logo, site name, and theme colors.
+- Each showground can have its own WhatsApp number; inquiries are saved and open a pre-addressed WhatsApp message for that location.
 - Manager accounts are assigned specific showgrounds and are restricted server-side to read-only details for those locations.
 - Password login with secure reset links. Brevo's free sending allowance can be used for reset emails.
 - Demo mode so the full flow works before provider credentials are configured.

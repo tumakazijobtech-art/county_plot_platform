@@ -50,6 +50,7 @@ Select **Scan permit** in the header, allow camera access, and point the camera 
 - Keep plot status values as `available`, `reserved`, or `taken`. Do not manually mark a plot as `taken` until payment has been confirmed, unless correcting a record.
 - Use **Managers** to create individual manager accounts and assign each account one or more showgrounds. Managers have read-only, server-enforced access to their assigned locations only.
 - Use **Logo & theme** to change the logo shown on the public booking flow and lease permits, plus the site's primary, accent, background, surface, and text colors.
+- Set a WhatsApp number on each showground's inventory record. Questions submitted for that location are saved and open a pre-addressed WhatsApp message to its number.
 - Review `Booking` and `Payment` records together when reconciling M-Pesa.
 - Use **Visitors & gate** to approve visitors and record QR/manual check-ins and check-outs.
 

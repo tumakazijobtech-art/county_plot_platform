@@ -18,6 +18,7 @@ const showgroundSchema = new mongoose.Schema({
   name: { type: String, required: true },
   lat: { type: Number, required: true },
   lng: { type: Number, required: true },
+  whatsappNumber: { type: String, trim: true, maxlength: 20 },
   season: {
     startMonth: { type: Number, min: 1, max: 12 },
     endMonth: { type: Number, min: 1, max: 12 }

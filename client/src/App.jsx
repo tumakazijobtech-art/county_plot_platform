@@ -515,13 +515,14 @@ function PublicApp() {
     if (!selectedShowground || !selectedPlot || !isValidPhone(form.phone)) return flash('Enter a valid phone number so the team can reply.', 'warning')
     try {
       setBusy(true)
-      await api('/api/inquiries', {
+      const result = await api('/api/inquiries', {
         method: 'POST',
         body: JSON.stringify({ showgroundId: selectedShowground.id, plotId: selectedPlot.id, phone: normalizePhone(form.phone), message: question })
       })
       setQuestion('')
       setShowQuestion(false)
-      flash('Question sent to the showground team.')
+      if (result.whatsappUrl) window.open(result.whatsappUrl, '_blank', 'noopener,noreferrer')
+      flash(result.whatsappUrl ? `WhatsApp opened for ${selectedShowground.name}.` : 'Question saved. This showground has no WhatsApp number configured yet.')
     } catch (error) {
       flash(error.message, 'error')
     } finally {

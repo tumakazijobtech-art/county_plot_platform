@@ -14,7 +14,7 @@ Base URL: `http://localhost:4000`
 - `GET /api/permits/:permitRef`
 - `POST /api/payments/stk`
 - `POST /api/payments/daraja/callback`
-- `POST /api/inquiries`
+- `POST /api/inquiries` — saves the inquiry and returns a showground-specific `whatsappUrl` when a WhatsApp number is configured.
 - `GET /api/settings`
 
 ## Admin

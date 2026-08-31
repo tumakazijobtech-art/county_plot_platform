@@ -33,6 +33,7 @@ const newToken = () => crypto.randomBytes(24).toString('base64url')
 const cleanPhone = (value = '') => value.replace(/\s+/g, '')
 const validPhone = (value) => phonePattern.test(cleanPhone(value))
 const phoneForMpesa = (value) => cleanPhone(value).replace(/^\+/, '')
+const phoneForWhatsApp = (value) => cleanPhone(String(value || '')).replace(/^\+/, '').replace(/^0/, '254')
 const cleanEmail = (value = '') => String(value).trim().toLowerCase()
 const passwordHash = (password, salt = crypto.randomBytes(16).toString('hex')) => new Promise((resolve, reject) => {
   crypto.scrypt(String(password), salt, 64, (error, derivedKey) => {
@@ -491,8 +492,12 @@ app.post('/api/inquiries', asyncRoute(async (req, res) => {
   const { showgroundId, plotId, message } = req.body
   const phone = cleanPhone(req.body.phone)
   if (!showgroundId || !plotId || !String(message || '').trim() || !validPhone(phone)) throw httpError(400, 'A valid phone number and question are required.', 'VALIDATION_ERROR')
+  const showground = await Showground.findOne({ id: showgroundId }).lean()
+  if (!showground) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
   const inquiry = await Inquiry.create({ showgroundId, plotId, phone, message: String(message).trim().slice(0, 1000) })
-  res.status(201).json({ ok: true, inquiry: { id: inquiry._id.toString(), status: inquiry.status } })
+  const whatsappNumber = String(showground.whatsappNumber || '').trim()
+  const whatsappUrl = whatsappNumber ? `https://wa.me/${phoneForWhatsApp(whatsappNumber)}?text=${encodeURIComponent(`Hello ${showground.name} team,\n\n${String(message).trim()}\n\nPlot: ${plotId}\nCustomer phone: ${phone}`)}` : ''
+  res.status(201).json({ ok: true, inquiry: { id: inquiry._id.toString(), status: inquiry.status }, whatsappNumber, whatsappUrl })
 }))
 
 app.get('/api/admin/dashboard', requireAdmin, asyncRoute(async (req, res) => {
@@ -522,6 +527,7 @@ app.post('/api/admin/showgrounds', requireAdmin, requireSuperAdmin, asyncRoute(a
     county: String(req.body.county).trim(),
     lat: Number(req.body.lat || 0),
     lng: Number(req.body.lng || 0),
+    whatsappNumber: cleanPhone(String(req.body.whatsappNumber || '')).slice(0, 20),
     season: req.body.season || {},
     plots: []
   })
@@ -534,7 +540,7 @@ app.put('/api/admin/showgrounds/:id', requireAdmin, requireSuperAdmin, asyncRout
   const cleanPlots = Array.isArray(plots) ? plots.map((plot) => cleanPlot(plot)).filter((plot) => plot.id) : []
   const updated = await Showground.findOneAndUpdate(
     { id: req.params.id },
-    { $set: { name: String(name).trim(), county: String(county).trim(), lat: Number(lat), lng: Number(lng), season, plots: cleanPlots } },
+    { $set: { name: String(name).trim(), county: String(county).trim(), lat: Number(lat), lng: Number(lng), whatsappNumber: cleanPhone(String(req.body.whatsappNumber || '')).slice(0, 20), season, plots: cleanPlots } },
     { new: true, runValidators: true }
   ).lean()
   if (!updated) throw httpError(404, 'Showground not found.', 'NOT_FOUND')

@@ -88,7 +88,7 @@ function AdminPortal() {
   const [showgrounds, setShowgrounds] = useState([])
   const [selectedGroundId, setSelectedGroundId] = useState('')
   const [groundDraft, setGroundDraft] = useState(null)
-  const [newGroundForm, setNewGroundForm] = useState({ id: '', name: '', county: '', lat: '', lng: '', startMonth: 1, endMonth: 12 })
+  const [newGroundForm, setNewGroundForm] = useState({ id: '', name: '', county: '', lat: '', lng: '', whatsappNumber: '', startMonth: 1, endMonth: 12 })
   const [newPlotForm, setNewPlotForm] = useState({ id: '', category: 'Open ground', size: '3x3m', price: 0, status: 'available', exhibitorsCapacity: 1, traffic: 'medium' })
   const [bookings, setBookings] = useState([])
   const [visitors, setVisitors] = useState([])
@@ -235,12 +235,13 @@ function AdminPortal() {
           county: newGroundForm.county,
           lat: Number(newGroundForm.lat || 0),
           lng: Number(newGroundForm.lng || 0),
+          whatsappNumber: newGroundForm.whatsappNumber,
           season: { startMonth: Number(newGroundForm.startMonth), endMonth: Number(newGroundForm.endMonth) }
         })
       })
       setShowgrounds((current) => [...current, result.showground].sort((a, b) => a.county.localeCompare(b.county)))
       selectGround(result.showground.id)
-      setNewGroundForm({ id: '', name: '', county: '', lat: '', lng: '', startMonth: 1, endMonth: 12 })
+      setNewGroundForm({ id: '', name: '', county: '', lat: '', lng: '', whatsappNumber: '', startMonth: 1, endMonth: 12 })
       flash('Showground created.')
     } catch (error) {
       flash(error.message, 'error')
@@ -510,7 +511,8 @@ function AdminPortal() {
                  <strong><Plus size={15} /> Add showground</strong>
                  <input value={newGroundForm.name} onChange={(event) => setNewGroundForm({ ...newGroundForm, name: event.target.value })} placeholder="Showground name" required />
                  <input value={newGroundForm.county} onChange={(event) => setNewGroundForm({ ...newGroundForm, county: event.target.value })} placeholder="County" required />
-                 <div className="admin-inline-fields"><input type="number" step="any" value={newGroundForm.lat} onChange={(event) => setNewGroundForm({ ...newGroundForm, lat: event.target.value })} placeholder="Latitude" required /><input type="number" step="any" value={newGroundForm.lng} onChange={(event) => setNewGroundForm({ ...newGroundForm, lng: event.target.value })} placeholder="Longitude" required /></div>
+                  <div className="admin-inline-fields"><input type="number" step="any" value={newGroundForm.lat} onChange={(event) => setNewGroundForm({ ...newGroundForm, lat: event.target.value })} placeholder="Latitude" required /><input type="number" step="any" value={newGroundForm.lng} onChange={(event) => setNewGroundForm({ ...newGroundForm, lng: event.target.value })} placeholder="Longitude" required /></div>
+                  <input type="tel" value={newGroundForm.whatsappNumber} onChange={(event) => setNewGroundForm({ ...newGroundForm, whatsappNumber: event.target.value })} placeholder="WhatsApp number (e.g. 0712 345 678)" />
                  <button className="btn block" disabled={busy}>Create showground</button>
                </form>}
                <div className="admin-ground-list">{showgrounds.map((ground) => <button className={selectedGroundId === ground.id ? 'admin-ground active' : 'admin-ground'} key={ground.id} onClick={() => selectGround(ground.id)}><span>{ground.county}</span><strong>{ground.name}</strong><small>{ground.plots.length} plots · {ground.plots.filter((plot) => plot.status === 'available').length} available</small></button>)}</div>
@@ -518,7 +520,8 @@ function AdminPortal() {
              </div>
              {groundDraft && <div className="admin-panel ground-editor">
                <div className="panel-heading"><div><span className="eyebrow">{readOnly ? 'View inventory' : 'Edit inventory'}</span><h2>{groundDraft.name}</h2></div>{!readOnly && <div className="panel-actions"><button type="button" className="btn secondary danger" onClick={deleteGround} disabled={busy}><Trash2 size={15} /> Delete</button><button type="button" className="btn" onClick={saveGround} disabled={busy}><Save size={15} /> Save changes</button></div>}</div>
-               <div className="admin-inline-fields"><label className="field">Showground name<input disabled={readOnly} value={groundDraft.name} onChange={(event) => setGroundDraft({ ...groundDraft, name: event.target.value })} /></label><label className="field">County<input disabled={readOnly} value={groundDraft.county} onChange={(event) => setGroundDraft({ ...groundDraft, county: event.target.value })} /></label></div>
+                <div className="admin-inline-fields"><label className="field">Showground name<input disabled={readOnly} value={groundDraft.name} onChange={(event) => setGroundDraft({ ...groundDraft, name: event.target.value })} /></label><label className="field">County<input disabled={readOnly} value={groundDraft.county} onChange={(event) => setGroundDraft({ ...groundDraft, county: event.target.value })} /></label></div>
+                <label className="field">Showground WhatsApp number<input disabled={readOnly} type="tel" value={groundDraft.whatsappNumber || ''} onChange={(event) => setGroundDraft({ ...groundDraft, whatsappNumber: event.target.value })} placeholder="e.g. 0712 345 678" /><span className="hint">Questions about this showground open WhatsApp to this number.</span></label>
                <div className="admin-inline-fields"><label className="field">Leasing opens (month)<input disabled={readOnly} type="number" min="1" max="12" value={groundDraft.season?.startMonth || ''} onChange={(event) => setGroundDraft({ ...groundDraft, season: { ...groundDraft.season, startMonth: Number(event.target.value) } })} /></label><label className="field">Leasing closes (month)<input disabled={readOnly} type="number" min="1" max="12" value={groundDraft.season?.endMonth || ''} onChange={(event) => setGroundDraft({ ...groundDraft, season: { ...groundDraft.season, endMonth: Number(event.target.value) } })} /></label></div>
                <div className="plot-editor"><div className="table-heading"><span>Plot</span><span>Category</span><span>Size</span><span>Price (KES)</span><span>Status</span><span /></div>{groundDraft.plots.map((plot, index) => <div className="plot-edit-row" key={plot.id}><strong>{plot.id}</strong><input disabled={readOnly} value={plot.category} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...plot, category: event.target.value }; setGroundDraft({ ...groundDraft, plots }) }} /><input disabled={readOnly} value={plot.size} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...plot, size: event.target.value }; setGroundDraft({ ...groundDraft, plots }) }} /><input disabled={readOnly} type="number" value={plot.price} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...plot, price: Number(event.target.value) }; setGroundDraft({ ...groundDraft, plots }) }} /><select disabled={readOnly} value={plot.status} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...groundDraft.plots }; plots[index] = { ...plot, status: event.target.value }; setGroundDraft({ ...groundDraft, plots }) }}><option value="available">Available</option><option value="reserved">Reserved</option><option value="taken">Taken</option></select>{!readOnly && <button type="button" className="icon-button danger" onClick={() => deletePlot(plot)} title={`Delete plot ${plot.id}`}><Trash2 size={14} /></button>}</div>)}</div>
                {!readOnly && <form className="add-plot-form" onSubmit={addPlot}><strong><Plus size={15} /> Add plot</strong><input value={newPlotForm.id} onChange={(event) => setNewPlotForm({ ...newPlotForm, id: event.target.value })} placeholder="Plot ID (e.g. E-01)" required /><input value={newPlotForm.category} onChange={(event) => setNewPlotForm({ ...newPlotForm, category: event.target.value })} placeholder="Category" required /><input value={newPlotForm.size} onChange={(event) => setNewPlotForm({ ...newPlotForm, size: event.target.value })} placeholder="Size" required /><input type="number" min="0" value={newPlotForm.price} onChange={(event) => setNewPlotForm({ ...newPlotForm, price: Number(event.target.value) })} placeholder="Price KES" required /><button className="btn" disabled={busy}>Add plot</button></form>}
