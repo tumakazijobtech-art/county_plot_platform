@@ -159,6 +159,7 @@ function TrafficBars({ traffic }) {
 }
 
 export default function App() {
+  const [now, setNow] = useState(() => new Date())
   const [showgrounds, setShowgrounds] = useState([])
   const [selectedShowground, setSelectedShowground] = useState(null)
   const [selectedPlot, setSelectedPlot] = useState(null)
@@ -175,6 +176,11 @@ export default function App() {
   const [question, setQuestion] = useState('')
   const [showQuestion, setShowQuestion] = useState(false)
   const [permitQr, setPermitQr] = useState('')
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const flash = useCallback((message, tone = 'info') => {
     setNotice({ message, tone })
@@ -390,9 +396,9 @@ export default function App() {
     <div className="app-shell">
       <div className="wrap">
         <div className="datetime-bar">
-          <span className="dt-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+            <span className="dt-date">{now.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
           <span className="dt-sep">·</span>
-          <span className="dt-clock">{new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+            <span className="dt-clock" aria-live="polite">{now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
         </div>
         <header className="top">
           <div><h1>County Showgrounds</h1><p>Exhibitor plot booking</p></div>

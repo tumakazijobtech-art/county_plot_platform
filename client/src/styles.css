@@ -2,7 +2,8 @@
 
 :root{--bg:#f2f4ee;--surface:#fff;--muted:#eaeee2;--ink:#232a22;--soft:#5b6459;--border:#d3d8c9;--green:#2b4034;--green-soft:#4c7a5d;--amber:#b98a3e;--gray:#8b8b82;--radius:10px;font-family:Karla,sans-serif;color:var(--ink);background:var(--bg)}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);line-height:1.5}
+html{touch-action:pan-y}
+body{margin:0;background:var(--bg);line-height:1.5;touch-action:pan-y}
 button,input,select,textarea{font:inherit}
 button{cursor:pointer}
 button:disabled{opacity:.45;cursor:not-allowed}
@@ -11,7 +12,7 @@ h1,h2,h3{font-family:'Zilla Slab',serif;font-weight:500;margin:0}
 .wrap{max-width:960px;margin:0 auto;padding:22px 20px 70px}
 .datetime-bar{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:5px 2px 10px;font-size:12px;color:var(--soft);border-bottom:1px solid var(--border);margin-bottom:18px;flex-wrap:wrap}
 .dt-date{font-weight:500;color:var(--ink)}
-.dt-clock{font-variant-numeric:tabular-nums;background:var(--muted);border-radius:6px;padding:3px 8px;color:var(--green);font-weight:600}
+.dt-clock{font-variant-numeric:tabular-nums;background:var(--muted);border-radius:6px;padding:3px 8px;color:var(--green);font-weight:600;min-width:84px;text-align:center;transition:background-color .2s ease,color .2s ease}
 .dt-sep{color:var(--border)}
 .top{display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--border);padding-bottom:20px;margin-bottom:18px}
 .top h1{font-size:28px;color:var(--green);letter-spacing:-.01em}
