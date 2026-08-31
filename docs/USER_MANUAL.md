@@ -39,6 +39,10 @@ With live Daraja credentials, the phone receives an M-Pesa prompt. Enter the M-P
 
 When the payment is confirmed, the permit screen displays the permit reference and QR verification value. Download the PDF and present it with valid ID at the gate.
 
+### 8. Verify an exhibitor permit
+
+Select **Scan permit** in the header, allow camera access, and point the camera at the permit QR code. The scanner retrieves the confirmed permit from the server and displays the exhibitor, showground, plot, setup date, and amount paid. If camera scanning is unavailable, enter the permit number manually.
+
 ## For showground staff
 
 - Seed the initial catalog with `npm run seed`.
@@ -46,7 +50,7 @@ When the payment is confirmed, the permit screen displays the permit reference a
 - Keep plot status values as `available`, `reserved`, or `taken`.
 - Do not manually mark a plot as `taken` until payment has been confirmed, unless correcting a record.
 - Review `Booking` and `Payment` records together when reconciling M-Pesa.
-- Use `GET /api/bookings/:id` to verify a permit reference.
+- Use the in-app **Scan permit** tool or `GET /api/permits/:permitRef` to verify a confirmed permit.
 
 ## Demo mode
 

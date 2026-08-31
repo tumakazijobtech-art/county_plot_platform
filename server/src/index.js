@@ -216,6 +216,33 @@ app.get('/api/bookings/:id', asyncRoute(async (req, res) => {
   res.json({ booking: publicBooking(booking), payment: paymentPublic(payment) })
 }))
 
+app.get('/api/permits/:permitRef', asyncRoute(async (req, res) => {
+  const permitRef = decodeURIComponent(req.params.permitRef || '').trim()
+  if (!permitRef) throw httpError(400, 'A permit reference is required.', 'INVALID_PERMIT')
+  const booking = await Booking.findOne({ permitRef, status: 'confirmed' }).lean()
+  if (!booking) throw httpError(404, 'This permit could not be verified.', 'PERMIT_NOT_FOUND')
+  const showground = await Showground.findOne({ id: booking.showgroundId }).lean()
+  const plot = showground?.plots?.find((item) => item.id === booking.plotId)
+  res.json({
+    permit: {
+      permitRef: booking.permitRef,
+      status: booking.status,
+      exhibitorName: booking.exhibitorName,
+      exhibitorCount: booking.exhibitorCount,
+      powerNeed: booking.powerNeed,
+      signageText: booking.signageText,
+      setupDate: booking.setupDate,
+      competitionOptIn: booking.competitionOptIn,
+      amount: booking.amount,
+      showgroundName: showground?.name || booking.showgroundId,
+      county: showground?.county || '',
+      plotId: booking.plotId,
+      category: plot?.category || '',
+      size: plot?.size || ''
+    }
+  })
+}))
+
 app.post('/api/payments/stk', asyncRoute(async (req, res) => {
   const { bookingId } = req.body
   const phone = cleanPhone(req.body.phone)

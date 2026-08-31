@@ -11,6 +11,7 @@ Base URL: `http://localhost:4000`
 - `POST /api/otp/verify`
 - `POST /api/bookings`
 - `GET /api/bookings/:bookingId`
+- `GET /api/permits/:permitRef`
 - `POST /api/payments/stk`
 - `POST /api/payments/daraja/callback`
 - `POST /api/inquiries`

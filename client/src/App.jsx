@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, Marker, Popup, Rectangle, TileLayer, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { ArrowLeft, ArrowRight, Check, CircleHelp, Clock3, Download, Leaf, MapPin, MessageSquare, RefreshCw, Send, Smartphone, Store, Ticket } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, CircleHelp, Clock3, Download, Leaf, MapPin, MessageSquare, RefreshCw, ScanLine, Send, Smartphone, Store, Ticket, Video, X } from 'lucide-react'
 import { jsPDF } from 'jspdf'
 import QRCode from 'qrcode'
 import { api } from './api'
 
 const steps = ['Showground', 'Browse', 'Map', 'Inquire', 'Book', 'Pay', 'Permit']
-const viewStep = { showground: 0, browse: 1, map: 2, book: 4, pay: 5, permit: 6 }
+const viewStep = { showground: 0, browse: 1, map: 2, book: 4, pay: 5, permit: 6, scanner: 6 }
 
 function formatMoney(value) {
   return `KES ${Number(value || 0).toLocaleString()}`
@@ -20,6 +20,32 @@ function normalizePhone(value = '') {
 
 function isValidPhone(value) {
   return /^(?:\+254|0)(?:7|1)\d{8}$/.test(value.replace(/\s+/g, ''))
+}
+
+function extractPermitRef(rawValue = '') {
+  const value = String(rawValue).trim()
+  const schemeMatch = value.match(/^county-plot-hub:\/\/permit\/(.+)$/i)
+  if (schemeMatch) return decodeURIComponent(schemeMatch[1]).trim()
+  try {
+    const url = new URL(value)
+    const parts = url.pathname.split('/').filter(Boolean)
+    if (parts.length) return decodeURIComponent(parts[parts.length - 1]).trim()
+  } catch {
+    // A plain permit reference is also accepted below.
+  }
+  return /^[A-Z0-9][A-Z0-9-]{4,79}$/i.test(value) ? value : ''
+}
+
+async function loadImageDataUrl(path) {
+  const response = await fetch(path)
+  if (!response.ok) throw new Error('Permit logo could not be loaded')
+  const blob = await response.blob()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
 }
 
 function formatCountdown(ms) {
@@ -158,6 +184,103 @@ function TrafficBars({ traffic }) {
   return <span className="traffic-label"><span className="traffic-bars">{[1, 2, 3].map((item) => <i className={item <= count ? 'on' : ''} key={item} />)}</span>{traffic}</span>
 }
 
+function PermitScanner({ permit, onScan, onClose, busy }) {
+  const videoRef = useRef(null)
+  const lastValue = useRef('')
+  const [manualRef, setManualRef] = useState('')
+  const [cameraMessage, setCameraMessage] = useState('')
+
+  useEffect(() => {
+    let stream
+    let animationFrame
+    let active = true
+    const startCamera = async () => {
+      if (!('BarcodeDetector' in window)) {
+        setCameraMessage('Camera scanning is not supported in this browser. Enter the permit number below.')
+        return
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+        if (!active || !videoRef.current) return
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+        const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
+        const scanFrame = async () => {
+          if (!active || !videoRef.current || videoRef.current.readyState < 2) {
+            if (active) animationFrame = window.requestAnimationFrame(scanFrame)
+            return
+          }
+          try {
+            const codes = await detector.detect(videoRef.current)
+            const rawValue = codes[0]?.rawValue
+            if (rawValue && rawValue !== lastValue.current) {
+              lastValue.current = rawValue
+              onScan(rawValue)
+            }
+          } catch {
+            // Keep the camera running; transient frames can fail to decode.
+          }
+          if (active) animationFrame = window.requestAnimationFrame(scanFrame)
+        }
+        scanFrame()
+      } catch {
+        setCameraMessage('Camera access was unavailable. Allow camera permission or enter the permit number below.')
+      }
+    }
+    startCamera()
+    return () => {
+      active = false
+      if (animationFrame) window.cancelAnimationFrame(animationFrame)
+      stream?.getTracks().forEach((track) => track.stop())
+    }
+  }, [onScan])
+
+  const submitManual = (event) => {
+    event.preventDefault()
+    onScan(manualRef)
+  }
+
+  return (
+    <section className="scanner-screen">
+      <div className="section-heading">
+        <div><span className="eyebrow">Permit verification</span><h2>Scan an exhibitor permit</h2></div>
+        <button className="back-button" onClick={onClose}><X size={15} /> Close scanner</button>
+      </div>
+      <div className="scanner-layout">
+        <div className="scanner-card">
+          <div className="scanner-view">
+            <video ref={videoRef} muted playsInline aria-label="QR code camera scanner" />
+            <div className="scanner-frame"><i /><i /><i /><i /></div>
+            {!cameraMessage && <span className="scanner-hint"><Video size={15} /> Point the camera at the permit QR code</span>}
+          </div>
+          {cameraMessage && <p className="scanner-message">{cameraMessage}</p>}
+          <form className="manual-scan" onSubmit={submitManual}>
+            <label className="field">Or enter permit number
+              <input value={manualRef} onChange={(event) => setManualRef(event.target.value)} placeholder="e.g. NAI-B-05-1864" autoCapitalize="characters" />
+            </label>
+            <button className="btn" type="submit" disabled={busy || !manualRef.trim()}><ScanLine size={16} /> Verify permit</button>
+          </form>
+        </div>
+        {permit && (
+          <div className="permit-result">
+            <div className="verified-heading"><Check size={17} /> Verified permit</div>
+            <h3>{permit.exhibitorName}</h3>
+            <p className="muted">{permit.permitRef} · {permit.status}</p>
+            <div className="detail-row"><span>Showground</span><strong>{permit.showgroundName}</strong></div>
+            <div className="detail-row"><span>County</span><strong>{permit.county}</strong></div>
+            <div className="detail-row"><span>Plot</span><strong>{permit.plotId}</strong></div>
+            <div className="detail-row"><span>Category</span><strong>{permit.category || '—'}</strong></div>
+            <div className="detail-row"><span>Stand size</span><strong>{permit.size || '—'}</strong></div>
+            <div className="detail-row"><span>Exhibitors</span><strong>{permit.exhibitorCount}</strong></div>
+            <div className="detail-row"><span>Setup date</span><strong>{permit.setupDate || 'Not set'}</strong></div>
+            <div className="detail-row"><span>Amount paid</span><strong>{formatMoney(permit.amount)}</strong></div>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export default function App() {
   const [now, setNow] = useState(() => new Date())
   const [showgrounds, setShowgrounds] = useState([])
@@ -176,6 +299,7 @@ export default function App() {
   const [question, setQuestion] = useState('')
   const [showQuestion, setShowQuestion] = useState(false)
   const [permitQr, setPermitQr] = useState('')
+  const [verifiedPermit, setVerifiedPermit] = useState(null)
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000)
@@ -356,6 +480,27 @@ export default function App() {
     }
   }
 
+  const verifyPermit = useCallback(async (rawValue) => {
+    const permitRef = extractPermitRef(rawValue)
+    if (!permitRef) return flash('That QR code does not contain a valid permit reference.', 'warning')
+    try {
+      setBusy(true)
+      const result = await api(`/api/permits/${encodeURIComponent(permitRef)}`)
+      setVerifiedPermit(result.permit)
+      flash('Permit verified successfully.')
+    } catch (error) {
+      setVerifiedPermit(null)
+      flash(error.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [flash])
+
+  const openScanner = () => {
+    setVerifiedPermit(null)
+    setView('scanner')
+  }
+
   const reset = async () => {
     setSelectedShowground(null)
     setSelectedPlot(null)
@@ -370,12 +515,18 @@ export default function App() {
     await loadCatalog().catch(() => {})
   }
 
-  const downloadPermit = () => {
+  const downloadPermit = async () => {
     if (!booking || !selectedPlot || !selectedShowground) return
     const doc = new jsPDF()
     const green = [43, 64, 52]; const amber = [185, 138, 62]; const ink = [35, 42, 34]; const soft = [91, 100, 89]; const border = [211, 216, 201]
     doc.setFillColor(...green); doc.rect(0, 0, 210, 42, 'F')
-    doc.setFillColor(...amber); doc.circle(26, 21, 9, 'F'); doc.setTextColor(...green); doc.setFontSize(12); doc.text('CPH', 26, 25, { align: 'center' })
+    doc.setFillColor(...amber); doc.circle(26, 21, 10, 'F')
+    try {
+      const logoDataUrl = await loadImageDataUrl('/county-showgrounds-logo.png')
+      doc.addImage(logoDataUrl, 'PNG', 17, 12, 18, 18)
+    } catch {
+      doc.setTextColor(...green); doc.setFontSize(12); doc.text('CPH', 26, 25, { align: 'center' })
+    }
     doc.setTextColor(242, 244, 238); doc.setFontSize(9); doc.text('EXHIBITOR PLOT LEASE PERMIT', 42, 16); doc.setFontSize(20); doc.text('County Showgrounds', 42, 27); doc.setFontSize(9); doc.text(selectedShowground.name, 42, 35)
     doc.setTextColor(...ink); doc.setFontSize(9); doc.text('PERMIT NO.', 20, 57); doc.setFontSize(14); doc.text(booking.permitRef || 'PENDING', 20, 66)
     doc.setDrawColor(...border); doc.roundedRect(15, 76, 180, 88, 3, 3)
@@ -402,7 +553,7 @@ export default function App() {
         </div>
         <header className="top">
           <div><h1>County Showgrounds</h1><p>Exhibitor plot booking</p></div>
-          <div className="brand-logo" aria-label="County Showgrounds seal"><Leaf size={39} strokeWidth={1.4} /></div>
+          <div className="top-actions"><button className="btn secondary scan-button" onClick={openScanner}><ScanLine size={15} /> Scan permit</button><div className="brand-logo" aria-label="County Showgrounds seal"><Leaf size={39} strokeWidth={1.4} /></div></div>
         </header>
         <Stepper current={currentStep} />
         {notice && <div className={`toast ${notice.tone}`}><span className="toast-dot" />{notice.message}</div>}
@@ -414,6 +565,8 @@ export default function App() {
         )}
 
         {loading && <div className="loading-card"><RefreshCw className="spin" /> Loading the live catalog…</div>}
+
+        {!loading && view === 'scanner' && <PermitScanner permit={verifiedPermit} onScan={verifyPermit} onClose={() => setView('showground')} busy={busy} />}
 
         {!loading && view === 'showground' && (
           <section>
