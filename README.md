@@ -20,6 +20,7 @@ County Plot Hub is a production-oriented MERN booking system for exhibitor plots
 - Admin plot digitizer ("Plot boundaries" tab): upload a georeferenced site-plan image or import a GeoJSON file, trace each plot as a real polygon, drag vertices to correct the shape, and get a warning if two plots overlap. Digitized plots render as true polygons — colored by available/reserved/taken status — on the public map, and visitors click a plot's polygon to start the existing booking flow. See [Digitizing plot boundaries](#digitizing-plot-boundaries) below.
 - Admin-controlled public logo, lease-permit logo, site name, and theme colors.
 - Each showground can have its own WhatsApp number; inquiries are saved and open a pre-addressed WhatsApp message for that location.
+- The plot detail screen shows a support contact card (call + WhatsApp) for the selected showground, falling back to the site-wide support phone if that showground has no WhatsApp number set.
 - Manager accounts are assigned specific showgrounds and are restricted server-side to read-only details for those locations.
 - Password login with secure reset links. Brevo's free sending allowance can be used for reset emails.
 - Demo mode so the full flow works before provider credentials are configured.
@@ -37,6 +38,14 @@ cp client/.env.example client/.env
 npm run seed
 npm run dev
 ```
+
+`npm run seed` also creates a ready-to-use manager account so you always have a working login even if creating one through the admin panel fails:
+
+- Email: `manager@countyshowgrounds.test`
+- Password: `ManagerDemo123!`
+- Assigned to: Nyeri Agricultural Showground, Kisumu Showground
+
+Re-running `npm run seed` re-applies this account (including resetting its password), so you can restore it any time. Change or remove it before production — either through the admin panel or with `npm run manager -- update` / `npm run manager -- remove` (see below).
 
 Open `http://localhost:5173`.
 

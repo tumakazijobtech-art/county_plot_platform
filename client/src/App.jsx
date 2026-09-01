@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ImageOverlay, MapContainer, Marker, Polygon, Popup, Rectangle, TileLayer, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { ArrowLeft, ArrowRight, Check, CheckCircle2, CircleAlert, CircleHelp, Clock3, Download, Leaf, MapPin, MessageSquare, RefreshCw, ScanLine, Send, Smartphone, Store, Ticket, Video, X, XCircle } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, CircleAlert, CircleHelp, Clock3, Download, Leaf, MapPin, MessageCircle, MessageSquare, Phone, RefreshCw, ScanLine, Send, Smartphone, Store, Ticket, Video, X, XCircle } from 'lucide-react'
 import { jsPDF } from 'jspdf'
 import QRCode from 'qrcode'
 import { api } from './api'
@@ -54,6 +54,35 @@ function normalizePhone(value = '') {
 
 function isValidPhone(value) {
   return /^(?:\+254|0)(?:7|1)\d{8}$/.test(value.replace(/\s+/g, ''))
+}
+
+// Mirrors the server's phoneForWhatsApp: wa.me links need a bare
+// international number with no leading + and no leading trunk 0.
+function phoneForWhatsApp(value = '') {
+  return String(value).replace(/\s+/g, '').replace(/^\+/, '').replace(/^0/, '254')
+}
+
+function formatDisplayPhone(value = '') {
+  const clean = String(value).replace(/\s+/g, '')
+  return clean.startsWith('+254') ? `0${clean.slice(4)}` : clean
+}
+
+function SupportContact({ showground, siteSettings }) {
+  const number = String(showground?.whatsappNumber || siteSettings?.supportPhone || '').trim()
+  if (!number) return null
+  const hasWhatsapp = Boolean(showground?.whatsappNumber)
+  const waHref = hasWhatsapp
+    ? `https://wa.me/${phoneForWhatsApp(number)}?text=${encodeURIComponent(`Hello ${showground.name} team, I have a question about a plot.`)}`
+    : ''
+  return (
+    <div className="support-contact">
+      <span className="support-contact-label"><Phone size={14} /> Support for {showground?.name || 'this showground'}</span>
+      <div className="support-contact-actions">
+        <a className="btn secondary block" href={`tel:${number.replace(/\s+/g, '')}`}><Phone size={15} /> {formatDisplayPhone(number)}</a>
+        {hasWhatsapp && <a className="btn block" href={waHref} target="_blank" rel="noopener noreferrer"><MessageCircle size={15} /> WhatsApp</a>}
+      </div>
+    </div>
+  )
 }
 
 function extractPermitRef(rawValue = '') {
@@ -738,6 +767,7 @@ function PublicApp() {
                 <div className="detail-row"><span>Exhibitors allowed</span><strong>{detailPlot.exhibitors_capacity}</strong></div>
                 <div className="detail-row"><span>Expected traffic</span><TrafficBars traffic={detailPlot.traffic} /></div>
                 <button className="btn secondary block" onClick={() => setShowQuestion(true)}><MessageSquare size={15} /> Ask a question</button>
+                <SupportContact showground={selectedShowground} siteSettings={siteSettings} />
                 <button className="btn block" disabled={!season?.active || detailPlot.status !== 'available'} onClick={startBooking}>Book this plot <ArrowRight size={16} /></button>
                 {!season?.active && <p className="booking-lock">Booking is closed for this showground during the current leasing window.</p>}
               </div>
