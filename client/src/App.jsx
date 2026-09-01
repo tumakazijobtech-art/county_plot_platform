@@ -9,6 +9,34 @@ import AdminPortal from './AdminPortal'
 
 const steps = ['Showground', 'Browse', 'Map', 'Inquire', 'Book', 'Pay', 'Permit']
 const viewStep = { showground: 0, browse: 1, map: 2, book: 4, pay: 5, permit: 6, scanner: 6 }
+const defaultSiteSettings = { siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' } }
+const brandSettingsStorageKey = 'county-plot-hub-brand-settings'
+
+function readCachedSiteSettings() {
+  try {
+    return JSON.parse(window.localStorage.getItem(brandSettingsStorageKey) || 'null')
+  } catch {
+    return null
+  }
+}
+
+function mergeSiteSettings(incoming = {}) {
+  return {
+    ...defaultSiteSettings,
+    ...incoming,
+    themeColors: { ...defaultSiteSettings.themeColors, ...(incoming.themeColors || {}) }
+  }
+}
+
+function loadCachedOrRemoteSiteSettings(remoteSettings) {
+  const remote = mergeSiteSettings(remoteSettings)
+  const cached = readCachedSiteSettings()
+  const remoteIsDefault = remote.siteName === defaultSiteSettings.siteName
+    && remote.logoUrl === defaultSiteSettings.logoUrl
+    && !remote.supportPhone
+    && Object.entries(defaultSiteSettings.themeColors).every(([key, value]) => remote.themeColors?.[key] === value)
+  return cached && remoteIsDefault ? mergeSiteSettings(cached) : remote
+}
 
 function formatMoney(value) {
   return `KES ${Number(value || 0).toLocaleString()}`
@@ -346,7 +374,7 @@ function PublicApp() {
   const [showQuestion, setShowQuestion] = useState(false)
   const [permitQr, setPermitQr] = useState('')
   const [verifiedPermit, setVerifiedPermit] = useState(null)
-  const [siteSettings, setSiteSettings] = useState({ siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' } })
+  const [siteSettings, setSiteSettings] = useState(() => loadCachedOrRemoteSiteSettings())
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000)
@@ -393,7 +421,7 @@ function PublicApp() {
 
   const loadSiteSettings = useCallback(async () => {
     const result = await api('/api/settings')
-    setSiteSettings((current) => ({ ...current, ...(result.settings || {}), themeColors: { ...(current.themeColors || {}), ...(result.settings?.themeColors || {}) } }))
+    setSiteSettings(loadCachedOrRemoteSiteSettings(result.settings))
   }, [])
 
   useEffect(() => {

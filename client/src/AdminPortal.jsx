@@ -5,11 +5,41 @@ import PlotBoundaryEditor from './PlotBoundaryEditor'
 
 const defaultThemeColors = { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' }
 const defaultSettings = { siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: defaultThemeColors }
+const emptyManagerForm = { id: '', name: '', email: '', password: '', showgroundIds: [] }
+const brandSettingsStorageKey = 'county-plot-hub-brand-settings'
 const mergeSettings = (incoming = {}) => ({
   ...defaultSettings,
   ...incoming,
   themeColors: { ...defaultThemeColors, ...(incoming.themeColors || {}) }
 })
+const readCachedSettings = () => {
+  try {
+    return JSON.parse(window.localStorage.getItem(brandSettingsStorageKey) || 'null')
+  } catch {
+    return null
+  }
+}
+const cacheSettings = (settings) => {
+  try {
+    window.localStorage.setItem(brandSettingsStorageKey, JSON.stringify({
+      siteName: settings.siteName,
+      logoUrl: settings.logoUrl,
+      supportPhone: settings.supportPhone,
+      themeColors: settings.themeColors
+    }))
+  } catch {
+    // The server remains the source of truth if browser storage is unavailable.
+  }
+}
+const isDefaultSettings = (settings) => settings.siteName === defaultSettings.siteName
+  && settings.logoUrl === defaultSettings.logoUrl
+  && !settings.supportPhone
+  && Object.entries(defaultThemeColors).every(([key, value]) => settings.themeColors?.[key] === value)
+const settingsFromServerOrCache = (serverSettings) => {
+  const remote = mergeSettings(serverSettings)
+  const cached = readCachedSettings()
+  return cached && isDefaultSettings(remote) ? mergeSettings(cached) : remote
+}
 
 function extractPermitRef(rawValue = '') {
   const value = String(rawValue).trim()
@@ -100,9 +130,9 @@ function AdminPortal() {
   const [visitors, setVisitors] = useState([])
   const [visitorForm, setVisitorForm] = useState({ fullName: '', phone: '', permitRef: '', showgroundId: '', visitDate: new Date().toISOString().slice(0, 10), note: '' })
   const [scanForm, setScanForm] = useState({ permitRef: '', visitorId: '', action: 'check_in' })
-  const [settings, setSettings] = useState(defaultSettings)
+  const [settings, setSettings] = useState(() => settingsFromServerOrCache())
   const [managers, setManagers] = useState([])
-  const [managerForm, setManagerForm] = useState({ id: '', name: '', email: '', password: '', showgroundIds: [] })
+  const [managerForm, setManagerForm] = useState(emptyManagerForm)
   const [notice, setNotice] = useState(null)
   const [resetLink, setResetLink] = useState('')
   const [busy, setBusy] = useState(false)
@@ -134,7 +164,7 @@ function AdminPortal() {
       setVisitors(visitorResult.visitors)
       if (me.admin.role === 'admin') {
         const [settingResult, managerResult] = await Promise.all([adminRequest('/api/admin/settings'), adminRequest('/api/admin/managers')])
-        setSettings(mergeSettings(settingResult.settings))
+        setSettings(settingsFromServerOrCache(settingResult.settings))
         setManagers(managerResult.managers || [])
       }
     } catch (error) {
@@ -384,7 +414,9 @@ function AdminPortal() {
         themeColors: { ...defaultThemeColors, ...(settings.themeColors || {}) }
       }
       const result = await adminRequest('/api/admin/settings', { method: 'PUT', body: JSON.stringify(payload) })
-      setSettings(mergeSettings(result.settings))
+      const savedSettings = mergeSettings(payload)
+      cacheSettings(savedSettings)
+      setSettings(savedSettings)
       flash('Brand settings saved. The public site now uses this logo.')
     } catch (error) {
       flash(error.message, 'error')
@@ -395,15 +427,26 @@ function AdminPortal() {
 
   const saveManager = async (event) => {
     event.preventDefault()
+    const payload = {
+      name: String(managerForm.name || '').trim(),
+      email: String(managerForm.email || '').trim().toLowerCase(),
+      password: String(managerForm.password || ''),
+      showgroundIds: Array.isArray(managerForm.showgroundIds) ? [...new Set(managerForm.showgroundIds.filter(Boolean))] : []
+    }
+    if (!payload.name || !payload.email || (!managerForm.id && payload.password.length < 8) || !payload.showgroundIds.length) {
+      flash(managerForm.id ? 'Name, email, and at least one showground are required.' : 'Name, email, password, and at least one showground are required.', 'warning')
+      return
+    }
     try {
       setBusy(true)
       const isEditing = Boolean(managerForm.id)
       const result = await adminRequest(isEditing ? `/api/admin/managers/${managerForm.id}` : '/api/admin/managers', {
         method: isEditing ? 'PUT' : 'POST',
-        body: JSON.stringify(managerForm)
+        body: JSON.stringify(payload)
       })
+      if (!result.manager?.id) throw new Error('The manager account was not returned by the server.')
       setManagers((current) => isEditing ? current.map((manager) => manager.id === result.manager.id ? result.manager : manager) : [...current, result.manager])
-      setManagerForm({ id: '', name: '', email: '', password: '', showgroundIds: [] })
+      setManagerForm(emptyManagerForm)
       flash(isEditing ? 'Manager updated.' : 'Manager created.')
     } catch (error) {
       flash(error.message, 'error')
@@ -418,7 +461,7 @@ function AdminPortal() {
       setBusy(true)
       await adminRequest(`/api/admin/managers/${manager.id}`, { method: 'DELETE' })
       setManagers((current) => current.filter((item) => item.id !== manager.id))
-      if (managerForm.id === manager.id) setManagerForm({ id: '', name: '', email: '', password: '', showgroundIds: [] })
+      if (managerForm.id === manager.id) setManagerForm(emptyManagerForm)
       flash('Manager account removed.')
     } catch (error) {
       flash(error.message, 'error')
@@ -514,12 +557,12 @@ function AdminPortal() {
              <div className="admin-panel">
                <div className="panel-heading"><div><span className="eyebrow">Access control</span><h2>Showground managers</h2></div><span className="catalog-count">{managers.length} accounts</span></div>
                <p className="muted">Each manager can sign in and view only the showgrounds assigned to their account. They cannot edit inventory or access another location.</p>
-               <div className="admin-table">{managers.map((manager) => <div className="admin-list-row manager-row" key={manager.id}><div><strong>{manager.name}</strong><span>{manager.email}</span><small>{manager.showgroundIds.length} assigned showground{manager.showgroundIds.length === 1 ? '' : 's'}</small></div><div className="row-actions"><button type="button" onClick={() => setManagerForm({ ...manager, password: '' })}><Pencil size={14} /> Edit</button><button type="button" className="reject" onClick={() => deleteManager(manager)} disabled={busy}><Trash2 size={14} /> Remove</button></div></div>)}</div>
+               <div className="admin-table">{managers.map((manager) => { const assignedIds = Array.isArray(manager.showgroundIds) ? manager.showgroundIds : []; return <div className="admin-list-row manager-row" key={manager.id}><div><strong>{manager.name}</strong><span>{manager.email}</span><small>{assignedIds.length} assigned showground{assignedIds.length === 1 ? '' : 's'}</small></div><div className="row-actions"><button type="button" onClick={() => setManagerForm({ ...manager, showgroundIds: assignedIds, password: '' })}><Pencil size={14} /> Edit</button><button type="button" className="reject" onClick={() => deleteManager(manager)} disabled={busy}><Trash2 size={14} /> Remove</button></div></div> })}</div>
              {!managers.length && <div className="empty-card">No individual managers have been added.</div>}
              </div>
              <div className="admin-panel">
-               <div className="panel-heading"><div><span className="eyebrow">{managerForm.id ? 'Edit manager' : 'New manager'}</span><h2>{managerForm.id ? 'Update access' : 'Add a manager'}</h2></div>{managerForm.id && <button className="back-button" onClick={() => setManagerForm({ id: '', name: '', email: '', password: '', showgroundIds: [] })}><X size={15} /> Clear</button>}</div>
-               <form className="admin-auth-form manager-form" onSubmit={saveManager}><label className="field">Full name<input value={managerForm.name} onChange={(event) => setManagerForm({ ...managerForm, name: event.target.value })} required /></label><label className="field">Email<input type="email" value={managerForm.email} onChange={(event) => setManagerForm({ ...managerForm, email: event.target.value })} required /></label><label className="field">{managerForm.id ? 'New password (optional)' : 'Temporary password'}<input type="password" value={managerForm.password} onChange={(event) => setManagerForm({ ...managerForm, password: event.target.value })} minLength="8" required={!managerForm.id} /></label><fieldset className="assignment-field"><legend>Assigned showgrounds</legend>{showgrounds.map((ground) => <label key={ground.id}><input type="checkbox" checked={managerForm.showgroundIds.includes(ground.id)} onChange={(event) => setManagerForm({ ...managerForm, showgroundIds: event.target.checked ? [...managerForm.showgroundIds, ground.id] : managerForm.showgroundIds.filter((id) => id !== ground.id) })} /> {ground.name}</label>)}</fieldset><button className="btn block" disabled={busy}>{managerForm.id ? 'Save manager' : 'Create manager'} <UserPlus size={15} /></button></form>
+               <div className="panel-heading"><div><span className="eyebrow">{managerForm.id ? 'Edit manager' : 'New manager'}</span><h2>{managerForm.id ? 'Update access' : 'Add a manager'}</h2></div>{managerForm.id && <button type="button" className="back-button" onClick={() => setManagerForm(emptyManagerForm)}><X size={15} /> Clear</button>}</div>
+               <form className="admin-auth-form manager-form" onSubmit={saveManager}><label className="field">Full name<input value={managerForm.name} onChange={(event) => setManagerForm({ ...managerForm, name: event.target.value })} autoComplete="name" required /></label><label className="field">Email<input type="email" value={managerForm.email} onChange={(event) => setManagerForm({ ...managerForm, email: event.target.value })} autoComplete="email" required /></label><label className="field">{managerForm.id ? 'New password (optional)' : 'Temporary password'}<input type="password" value={managerForm.password} onChange={(event) => setManagerForm({ ...managerForm, password: event.target.value })} minLength="8" required={!managerForm.id} autoComplete={managerForm.id ? 'new-password' : 'new-password'} /></label><fieldset className="assignment-field"><legend>Assigned showgrounds</legend>{showgrounds.length ? showgrounds.map((ground) => <label key={ground.id}><input type="checkbox" checked={managerForm.showgroundIds.includes(ground.id)} onChange={(event) => setManagerForm({ ...managerForm, showgroundIds: event.target.checked ? [...managerForm.showgroundIds, ground.id] : managerForm.showgroundIds.filter((id) => id !== ground.id) })} /> {ground.name}</label>) : <span className="muted">Create a showground before adding a manager.</span>}</fieldset><button className="btn block" disabled={busy || !showgrounds.length}>{managerForm.id ? 'Save manager' : 'Create manager'} <UserPlus size={15} /></button></form>
              </div>
            </section>
          )}

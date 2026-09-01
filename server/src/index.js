@@ -52,7 +52,7 @@ const passwordMatches = async (password, storedHash) => {
   return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer)
 }
 
-const publicAdmin = (admin) => ({ id: admin._id.toString(), email: admin.email, name: admin.name, role: admin.role, showgroundIds: admin.showgroundIds || [] })
+const publicAdmin = (admin) => ({ id: admin._id.toString(), email: admin.email, name: admin.name, role: admin.role, showgroundIds: Array.isArray(admin.showgroundIds) ? admin.showgroundIds : [] })
 const defaultThemeColors = { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' }
 const defaultPublicSettings = { key: 'primary', siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: defaultThemeColors }
 const isHexColor = (value) => /^#[0-9a-fA-F]{6}$/.test(String(value || ''))
@@ -350,7 +350,7 @@ app.post('/api/admin/managers', requireAdmin, requireSuperAdmin, asyncRoute(asyn
   const name = String(req.body.name || '').trim()
   const password = String(req.body.password || '')
   const showgroundIds = Array.isArray(req.body.showgroundIds) ? [...new Set(req.body.showgroundIds.map((id) => String(id).trim()).filter(Boolean))] : []
-  if (!email || !name || password.length < 8 || !showgroundIds.length) throw httpError(400, 'Name, email, password, and at least one showground are required.', 'VALIDATION_ERROR')
+  if (!email || !email.includes('@') || !name || password.length < 8 || !showgroundIds.length) throw httpError(400, 'Name, valid email, password, and at least one showground are required.', 'VALIDATION_ERROR')
   const validGrounds = await Showground.countDocuments({ id: { $in: showgroundIds } })
   if (validGrounds !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
   if (await AdminUser.exists({ email })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
@@ -365,17 +365,20 @@ app.put('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(a
   const email = cleanEmail(req.body.email)
   const name = String(req.body.name || '').trim()
   const showgroundIds = Array.isArray(req.body.showgroundIds) ? [...new Set(req.body.showgroundIds.map((id) => String(id).trim()).filter(Boolean))] : []
-  if (!email || !name || !showgroundIds.length) throw httpError(400, 'Name, email, and at least one showground are required.', 'VALIDATION_ERROR')
+  if (!email || !email.includes('@') || !name || !showgroundIds.length) throw httpError(400, 'Name, valid email, and at least one showground are required.', 'VALIDATION_ERROR')
   if (await AdminUser.exists({ email, _id: { $ne: manager._id } })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
   if (await Showground.countDocuments({ id: { $in: showgroundIds } }) !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
+  const emailChanged = manager.email !== email
   manager.email = email
   manager.name = name
   manager.showgroundIds = showgroundIds
-  if (String(req.body.password || '')) {
+  const passwordChanged = Boolean(String(req.body.password || ''))
+  if (passwordChanged) {
     if (String(req.body.password).length < 8) throw httpError(400, 'A new password must be at least 8 characters.', 'VALIDATION_ERROR')
     manager.passwordHash = await passwordHash(req.body.password)
   }
   await manager.save()
+  if (passwordChanged || emailChanged) await AdminSession.deleteMany({ adminId: manager._id })
   res.json({ manager: publicAdmin(manager) })
 }))
 
@@ -853,8 +856,9 @@ app.put('/api/admin/settings', requireAdmin, requireSuperAdmin, asyncRoute(async
 
 app.use((error, req, res, next) => {
   console.error(error)
-  const status = error.status || (error.name === 'ValidationError' ? 400 : 500)
-  res.status(status).json({ error: status >= 500 ? 'The server could not complete that request.' : error.message, code: error.code || 'SERVER_ERROR' })
+  const status = error.status || (error.code === 11000 ? 409 : error.name === 'ValidationError' ? 400 : 500)
+  const message = error.code === 11000 ? 'An account with that email already exists.' : error.message
+  res.status(status).json({ error: status >= 500 ? 'The server could not complete that request.' : message, code: error.code === 11000 ? 'DUPLICATE_EMAIL' : error.code || 'SERVER_ERROR' })
 })
 
 async function expireStaleBookings() {
