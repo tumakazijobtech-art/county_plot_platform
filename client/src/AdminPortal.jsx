@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ImagePlus, LogOut, Map, Pencil, Plus, QrCode, Save, ShieldCheck, Ticket, Trash2, Users, UserPlus, X } from 'lucide-react'
+import { Check, ImagePlus, LogOut, Map, MapPinned, Pencil, Plus, QrCode, Save, ShieldCheck, Ticket, Trash2, Users, UserPlus, X } from 'lucide-react'
 import { api } from './api'
+import PlotBoundaryEditor from './PlotBoundaryEditor'
 
 const defaultThemeColors = { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' }
 const defaultSettings = { siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: defaultThemeColors }
+const mergeSettings = (incoming = {}) => ({
+  ...defaultSettings,
+  ...incoming,
+  themeColors: { ...defaultThemeColors, ...(incoming.themeColors || {}) }
+})
 
 function extractPermitRef(rawValue = '') {
   const value = String(rawValue).trim()
@@ -128,7 +134,7 @@ function AdminPortal() {
       setVisitors(visitorResult.visitors)
       if (me.admin.role === 'admin') {
         const [settingResult, managerResult] = await Promise.all([adminRequest('/api/admin/settings'), adminRequest('/api/admin/managers')])
-        setSettings({ ...defaultSettings, ...(settingResult.settings || {}), themeColors: { ...defaultThemeColors, ...(settingResult.settings?.themeColors || {}) } })
+        setSettings(mergeSettings(settingResult.settings))
         setManagers(managerResult.managers || [])
       }
     } catch (error) {
@@ -207,6 +213,14 @@ function AdminPortal() {
     setSelectedGroundId(id)
     setGroundDraft(ground ? JSON.parse(JSON.stringify(ground)) : null)
   }
+
+  // Used by the plot-boundary digitizer, which saves each change (a traced
+  // polygon, an image upload, a GeoJSON import) immediately rather than as
+  // part of the batched "Save changes" flow used elsewhere in this screen.
+  const applyGroundUpdate = useCallback((updatedGround) => {
+    setShowgrounds((current) => current.map((item) => (item.id === updatedGround.id ? updatedGround : item)))
+    setGroundDraft((current) => (current?.id === updatedGround.id ? JSON.parse(JSON.stringify(updatedGround)) : current))
+  }, [])
 
   const saveGround = async () => {
     if (!groundDraft) return
@@ -363,8 +377,14 @@ function AdminPortal() {
   const saveSettings = async () => {
     try {
       setBusy(true)
-      const result = await adminRequest('/api/admin/settings', { method: 'PUT', body: JSON.stringify(settings) })
-      setSettings({ ...defaultSettings, ...result.settings })
+      const payload = {
+        siteName: String(settings.siteName ?? '').trim(),
+        logoUrl: String(settings.logoUrl ?? '').trim(),
+        supportPhone: String(settings.supportPhone ?? '').trim(),
+        themeColors: { ...defaultThemeColors, ...(settings.themeColors || {}) }
+      }
+      const result = await adminRequest('/api/admin/settings', { method: 'PUT', body: JSON.stringify(payload) })
+      setSettings(mergeSettings(result.settings))
       flash('Brand settings saved. The public site now uses this logo.')
     } catch (error) {
       flash(error.message, 'error')
@@ -450,6 +470,7 @@ function AdminPortal() {
   const nav = [
     ['overview', 'Overview', ShieldCheck],
     ['leasing-v2', 'Land leasing', Map],
+    ['boundaries', 'Plot boundaries', MapPinned],
     ['bookings-v2', readOnly ? 'Bookings (view only)' : 'Booking approvals', Ticket],
     ['visitors-v2', readOnly ? 'Visitors (view only)' : 'Visitors & gate', Users],
     ...(!readOnly ? [['managers', 'Managers', UserPlus], ['brand-v2', 'Logo & theme', ImagePlus]] : [])
@@ -528,10 +549,29 @@ function AdminPortal() {
              </div>}
            </section>
          )}
+
+         {activeTab === 'boundaries' && (
+           <section className="admin-content admin-two-column">
+             <div className="admin-panel">
+               <div className="panel-heading"><div><span className="eyebrow">Inventory</span><h2>Showgrounds</h2></div><span className="catalog-count">{showgrounds.length} locations</span></div>
+               <div className="admin-ground-list">{showgrounds.map((ground) => <button className={selectedGroundId === ground.id ? 'admin-ground active' : 'admin-ground'} key={ground.id} onClick={() => selectGround(ground.id)}><span>{ground.county}</span><strong>{ground.name}</strong><small>{ground.plots.filter((plot) => plot.boundary).length}/{ground.plots.length} digitized</small></button>)}</div>
+               {!showgrounds.length && <div className="empty-card">No showgrounds are assigned to this account.</div>}
+             </div>
+             <PlotBoundaryEditor
+               ground={showgrounds.find((item) => item.id === selectedGroundId) || null}
+               adminRequest={adminRequest}
+               flash={flash}
+               readOnly={readOnly}
+               busy={busy}
+               setBusy={setBusy}
+               onGroundUpdated={applyGroundUpdate}
+             />
+           </section>
+         )}
         <header className="admin-header"><div><span className="eyebrow">Operations dashboard</span><h1>{nav.find(([id]) => id === activeTab)?.[1]}</h1></div><div className="admin-user"><span>{admin?.name || 'Administrator'}</span><small>{admin?.email}</small></div></header>
         {notice && <div className={`admin-notice ${notice.tone}`}>{notice.message}</div>}
 
-        {activeTab === 'overview' && <section className="admin-content"><div className="metric-grid">{[['Showgrounds', dashboard.showgrounds, Map], ['Total bookings', dashboard.bookings, Ticket], ['Pending bookings', dashboard.pendingBookings, ShieldCheck], ['Visitors', dashboard.visitors, Users], ['Pending visitors', dashboard.pendingVisitors, QrCode]].map(([label, value, Icon]) => <div className="metric-card" key={label}><Icon size={17} /><span>{label}</span><strong>{value}</strong></div>)}</div><div className="admin-panel admin-quick"><div><span className="eyebrow">Recommended workflow</span><h2>Keep every lease and entry decision in one place.</h2><p className="muted">Update plot inventory, approve bookings, then approve visitors and scan their permit at the gate.</p></div><button className="btn" onClick={() => setActiveTab('leasing')}>Open leasing <Map size={15} /></button></div></section>}
+        {activeTab === 'overview' && <section className="admin-content"><div className="metric-grid">{[['Showgrounds', dashboard.showgrounds, Map], ['Total bookings', dashboard.bookings, Ticket], ['Pending bookings', dashboard.pendingBookings, ShieldCheck], ['Visitors', dashboard.visitors, Users], ['Pending visitors', dashboard.pendingVisitors, QrCode]].map(([label, value, Icon]) => <div className="metric-card" key={label}><Icon size={17} /><span>{label}</span><strong>{value}</strong></div>)}</div><div className="admin-panel admin-quick"><div><span className="eyebrow">Recommended workflow</span><h2>Keep every lease and entry decision in one place.</h2><p className="muted">Update plot inventory, approve bookings, then approve visitors and scan their permit at the gate.</p></div><div className="panel-actions"><button className="btn" onClick={() => setActiveTab('leasing-v2')}>Open leasing <Map size={15} /></button><button className="btn secondary" onClick={() => setActiveTab('boundaries')}>Digitize plots <MapPinned size={15} /></button></div></div></section>}
 
         {activeTab === 'leasing' && <section className="admin-content admin-two-column"><div className="admin-panel"><div className="panel-heading"><div><span className="eyebrow">Inventory</span><h2>Showgrounds</h2></div><span className="catalog-count">{showgrounds.length} locations</span></div><div className="admin-ground-list">{showgrounds.map((ground) => <button className={selectedGroundId === ground.id ? 'admin-ground active' : 'admin-ground'} key={ground.id} onClick={() => selectGround(ground.id)}><span>{ground.county}</span><strong>{ground.name}</strong><small>{ground.plots.length} plots · {ground.plots.filter((plot) => plot.status === 'available').length} available</small></button>)}</div></div>{groundDraft && <div className="admin-panel ground-editor"><div className="panel-heading"><div><span className="eyebrow">Edit inventory</span><h2>{groundDraft.name}</h2></div><button className="btn" onClick={saveGround} disabled={busy}><Save size={15} /> Save changes</button></div><div className="admin-inline-fields"><label className="field">Showground name<input value={groundDraft.name} onChange={(event) => setGroundDraft({ ...groundDraft, name: event.target.value })} /></label><label className="field">County<input value={groundDraft.county} onChange={(event) => setGroundDraft({ ...groundDraft, county: event.target.value })} /></label></div><div className="admin-inline-fields"><label className="field">Leasing opens (month)<input type="number" min="1" max="12" value={groundDraft.season?.startMonth || ''} onChange={(event) => setGroundDraft({ ...groundDraft, season: { ...groundDraft.season, startMonth: Number(event.target.value) } })} /></label><label className="field">Leasing closes (month)<input type="number" min="1" max="12" value={groundDraft.season?.endMonth || ''} onChange={(event) => setGroundDraft({ ...groundDraft, season: { ...groundDraft.season, endMonth: Number(event.target.value) } })} /></label></div><div className="plot-editor"><div className="table-heading"><span>Plot</span><span>Category</span><span>Size</span><span>Price (KES)</span><span>Status</span></div>{groundDraft.plots.map((plot, index) => <div className="plot-edit-row" key={plot.id}><strong>{plot.id}</strong><input value={plot.category} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...plot, category: event.target.value }; setGroundDraft({ ...groundDraft, plots }) }} /><input value={plot.size} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...plot, size: event.target.value }; setGroundDraft({ ...groundDraft, plots }) }} /><input type="number" value={plot.price} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...plot, price: Number(event.target.value) }; setGroundDraft({ ...groundDraft, plots }) }} /><select value={plot.status} onChange={(event) => { const plots = [...groundDraft.plots]; plots[index] = { ...plot, status: event.target.value }; setGroundDraft({ ...groundDraft, plots }) }}><option value="available">Available</option><option value="reserved">Reserved</option><option value="taken">Taken</option></select></div>)}</div></div>}</section>}
 

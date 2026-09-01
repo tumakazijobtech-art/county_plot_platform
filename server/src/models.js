@@ -1,5 +1,14 @@
 import mongoose from 'mongoose'
 
+// A plot boundary is a real, surveyed footprint rather than an approximate
+// point. It is stored as a single-ring GeoJSON Polygon so it can be rendered
+// directly by Leaflet/GeoJSON-aware tools and re-exported for GIS software.
+// Coordinates are [longitude, latitude] pairs, per the GeoJSON spec.
+const boundarySchema = new mongoose.Schema({
+  type: { type: String, enum: ['Polygon'], default: 'Polygon' },
+  coordinates: { type: [[[Number]]], required: true }
+}, { _id: false })
+
 const plotSchema = new mongoose.Schema({
   id: { type: String, required: true },
   category: { type: String, required: true },
@@ -8,8 +17,13 @@ const plotSchema = new mongoose.Schema({
   status: { type: String, enum: ['available', 'reserved', 'taken'], default: 'available' },
   exhibitorsCapacity: { type: Number, required: true, min: 1 },
   traffic: { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
+  // offsetN/offsetE remain as a fallback so plots that have not yet been
+  // digitized still render an approximate rectangle on the map.
   offsetN: { type: Number, default: 0 },
-  offsetE: { type: Number, default: 0 }
+  offsetE: { type: Number, default: 0 },
+  // Digitized boundary. Absent until an admin traces the plot on the site
+  // plan; once present it takes priority over offsetN/offsetE everywhere.
+  boundary: { type: boundarySchema, default: undefined }
 }, { _id: false })
 
 const showgroundSchema = new mongoose.Schema({
@@ -23,7 +37,20 @@ const showgroundSchema = new mongoose.Schema({
     startMonth: { type: Number, min: 1, max: 12 },
     endMonth: { type: Number, min: 1, max: 12 }
   },
-  plots: { type: [plotSchema], default: [] }
+  plots: { type: [plotSchema], default: [] },
+  // A georeferenced raster site plan used as a tracing guide in the admin
+  // digitizer. imageUrl may be a data URL (small uploads) or a hosted URL.
+  // bounds anchor the image to the real map as an axis-aligned rectangle.
+  sitePlan: {
+    imageUrl: { type: String, maxlength: 6000000 },
+    bounds: {
+      south: Number,
+      west: Number,
+      north: Number,
+      east: Number
+    },
+    opacity: { type: Number, default: 0.85, min: 0.2, max: 1 }
+  }
 }, { timestamps: true, versionKey: false })
 
 const otpSchema = new mongoose.Schema({

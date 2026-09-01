@@ -22,7 +22,9 @@ app.use(cors({
     return callback(new Error('Origin is not allowed by the API'))
   }
 }))
-app.use(express.json({ limit: '1mb' }))
+// 6mb accommodates a base64-encoded site-plan image upload (see the
+// /site-plan admin route); ordinary API bodies stay far below this.
+app.use(express.json({ limit: '6mb' }))
 app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'))
 app.use('/api', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false }))
 
@@ -63,6 +65,68 @@ const requireSuperAdmin = (req, res, next) => {
   return next()
 }
 const slugify = (value) => String(value || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60)
+
+// --- Plot boundary (GeoJSON Polygon) helpers -------------------------------
+// A boundary is stored as a single-ring Polygon: [[ [lng,lat], [lng,lat], ..., [lng,lat] ]]
+// with the first and last point identical (a closed ring), per the GeoJSON spec.
+function cleanBoundary(input) {
+  if (!input || typeof input !== 'object' || input.type !== 'Polygon') return undefined
+  const ring = Array.isArray(input.coordinates) ? input.coordinates[0] : undefined
+  if (!Array.isArray(ring)) return undefined
+  const points = ring
+    .filter((point) => Array.isArray(point) && point.length >= 2 && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])))
+    .map((point) => [Number(point[0]), Number(point[1])])
+    .filter((point) => point[0] >= -180 && point[0] <= 180 && point[1] >= -90 && point[1] <= 90)
+  // Drop a duplicated closing point before de-duplicating consecutive repeats.
+  const deduped = points.filter((point, index) => index === 0 || point[0] !== points[index - 1][0] || point[1] !== points[index - 1][1])
+  if (deduped.length && deduped.length > 1) {
+    const first = deduped[0]
+    const last = deduped[deduped.length - 1]
+    if (first[0] === last[0] && first[1] === last[1]) deduped.pop()
+  }
+  if (deduped.length < 3) return undefined
+  return { type: 'Polygon', coordinates: [[...deduped, deduped[0]]] }
+}
+
+function segmentsIntersect(p1, p2, p3, p4) {
+  const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+  const d1 = cross(p3, p4, p1)
+  const d2 = cross(p3, p4, p2)
+  const d3 = cross(p1, p2, p3)
+  const d4 = cross(p1, p2, p4)
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+}
+function pointInRing(point, ring) {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    if (((yi > point[1]) !== (yj > point[1])) && (point[0] < (xj - xi) * (point[1] - yi) / (yj - yi) + xi)) inside = !inside
+  }
+  return inside
+}
+function ringsOverlap(ringA, ringB) {
+  for (let i = 0; i < ringA.length - 1; i++) {
+    for (let j = 0; j < ringB.length - 1; j++) {
+      if (segmentsIntersect(ringA[i], ringA[i + 1], ringB[j], ringB[j + 1])) return true
+    }
+  }
+  return pointInRing(ringA[0], ringB) || pointInRing(ringB[0], ringA)
+}
+function boundariesOverlap(a, b) {
+  const ringA = a?.coordinates?.[0]
+  const ringB = b?.coordinates?.[0]
+  if (!ringA || !ringB || ringA.length < 4 || ringB.length < 4) return false
+  return ringsOverlap(ringA, ringB)
+}
+// Returns the IDs of any other plots in the same showground whose boundary
+// overlaps this one. Used to WARN the admin, not to block saving — a small
+// overlap may be intentional while shapes are still being corrected.
+function findOverlaps(plots, plotId, boundary) {
+  if (!boundary) return []
+  return plots.filter((plot) => plot.id !== plotId && plot.boundary && boundariesOverlap(plot.boundary, boundary)).map((plot) => plot.id)
+}
+
 const cleanPlot = (plot = {}, fallbackId = '') => ({
   id: String(plot.id || fallbackId).trim(),
   category: String(plot.category || 'Open ground').trim().slice(0, 100),
@@ -72,7 +136,8 @@ const cleanPlot = (plot = {}, fallbackId = '') => ({
   exhibitorsCapacity: Math.max(1, Number(plot.exhibitorsCapacity ?? plot.exhibitors_capacity ?? 1)),
   traffic: ['high', 'medium', 'low'].includes(plot.traffic) ? plot.traffic : 'medium',
   offsetN: Number(plot.offsetN || 0),
-  offsetE: Number(plot.offsetE || 0)
+  offsetE: Number(plot.offsetE || 0),
+  boundary: cleanBoundary(plot.boundary)
 })
 const publicVisitor = (visitor) => ({
   id: visitor._id.toString(),
@@ -590,6 +655,87 @@ app.delete('/api/admin/showgrounds/:id/plots/:plotId', requireAdmin, requireSupe
   res.json({ showground: updated })
 }))
 
+// --- Plot digitization: boundaries, GeoJSON import, and a georeferenced site plan image ---
+
+app.put('/api/admin/showgrounds/:id/plots/:plotId/boundary', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const showground = await Showground.findOne({ id: req.params.id })
+  if (!showground) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
+  const plot = showground.plots.find((item) => item.id === req.params.plotId)
+  if (!plot) throw httpError(404, 'Plot not found.', 'NOT_FOUND')
+  if (req.body.boundary === null) {
+    plot.boundary = undefined
+  } else {
+    const boundary = cleanBoundary(req.body.boundary)
+    if (!boundary) throw httpError(400, 'A plot boundary needs at least 3 distinct points.', 'INVALID_BOUNDARY')
+    plot.boundary = boundary
+  }
+  await showground.save()
+  const updated = await Showground.findOne({ id: req.params.id }).lean()
+  const savedPlot = updated.plots.find((item) => item.id === req.params.plotId)
+  const overlaps = savedPlot?.boundary ? findOverlaps(updated.plots, req.params.plotId, savedPlot.boundary) : []
+  res.json({ showground: updated, overlaps })
+}))
+
+// Bulk-import plot boundaries from a GeoJSON FeatureCollection (or a bare
+// array of Polygon features). Each feature is matched to an existing plot by
+// its `id`/`plotId` property; unmatched IDs and any resulting overlaps are
+// reported back rather than silently dropped or blocked.
+app.post('/api/admin/showgrounds/:id/geojson', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const showground = await Showground.findOne({ id: req.params.id })
+  if (!showground) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
+  const source = req.body.geojson
+  const features = Array.isArray(source?.features) ? source.features : Array.isArray(source) ? source : []
+  if (!features.length) throw httpError(400, 'No polygon features were found in that file.', 'VALIDATION_ERROR')
+  const matched = []
+  const unmatched = []
+  for (const feature of features) {
+    const geometry = feature?.geometry?.type ? feature.geometry : feature
+    if (geometry?.type !== 'Polygon') continue
+    const plotId = String(feature?.properties?.id ?? feature?.properties?.plotId ?? feature?.id ?? '').trim()
+    const boundary = cleanBoundary(geometry)
+    if (!boundary) continue
+    if (!plotId) { unmatched.push('(feature without an id)'); continue }
+    const plot = showground.plots.find((item) => item.id === plotId)
+    if (!plot) { unmatched.push(plotId); continue }
+    plot.boundary = boundary
+    matched.push(plotId)
+  }
+  if (!matched.length) throw httpError(400, 'None of the polygon IDs in that file matched an existing plot ID in this showground. Plot IDs must match exactly, e.g. "A-01".', 'NO_MATCHES')
+  await showground.save()
+  const updated = await Showground.findOne({ id: req.params.id }).lean()
+  const overlaps = {}
+  for (const plotId of matched) {
+    const plot = updated.plots.find((item) => item.id === plotId)
+    const found = plot?.boundary ? findOverlaps(updated.plots, plotId, plot.boundary) : []
+    if (found.length) overlaps[plotId] = found
+  }
+  res.json({ showground: updated, matched, unmatched, overlaps })
+}))
+
+app.put('/api/admin/showgrounds/:id/site-plan', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const imageUrl = String(req.body.imageUrl || '').trim()
+  if (!imageUrl) throw httpError(400, 'A site-plan image is required.', 'VALIDATION_ERROR')
+  if (imageUrl.length > 6000000) throw httpError(413, 'The site-plan image is too large. Use an image under 4 MB.', 'IMAGE_TOO_LARGE')
+  const bounds = req.body.bounds || {}
+  const [south, west, north, east] = ['south', 'west', 'north', 'east'].map((key) => Number(bounds[key]))
+  if (![south, west, north, east].every(Number.isFinite)) throw httpError(400, 'Provide numeric south/west/north/east bounds for the image.', 'VALIDATION_ERROR')
+  if (south >= north || west >= east) throw httpError(400, 'The south-west corner must sit below and to the left of the north-east corner.', 'VALIDATION_ERROR')
+  const opacity = Math.min(1, Math.max(0.2, Number(req.body.opacity) || 0.85))
+  const updated = await Showground.findOneAndUpdate(
+    { id: req.params.id },
+    { $set: { sitePlan: { imageUrl, bounds: { south, west, north, east }, opacity } } },
+    { new: true, runValidators: true }
+  ).lean()
+  if (!updated) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
+  res.json({ showground: updated })
+}))
+
+app.delete('/api/admin/showgrounds/:id/site-plan', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
+  const updated = await Showground.findOneAndUpdate({ id: req.params.id }, { $unset: { sitePlan: 1 } }, { new: true }).lean()
+  if (!updated) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
+  res.json({ showground: updated })
+}))
+
 app.get('/api/admin/bookings', requireAdmin, asyncRoute(async (req, res) => {
   const filter = ['pending', 'approved', 'rejected'].includes(req.query.approvalStatus) ? { approvalStatus: req.query.approvalStatus } : {}
   Object.assign(filter, bookingScope(req.admin))
@@ -690,16 +836,19 @@ app.get('/api/admin/settings', requireAdmin, requireSuperAdmin, asyncRoute(async
 }))
 
 app.put('/api/admin/settings', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
-  const logoUrl = String(req.body.logoUrl || '/county-showgrounds-logo.png').trim()
+  const siteName = String(req.body.siteName ?? 'County Showgrounds').trim().slice(0, 120)
+  const logoUrl = String(req.body.logoUrl ?? '/county-showgrounds-logo.png').trim()
   if (logoUrl.length > 700000) throw httpError(413, 'The logo file is too large. Use an image under 500 KB.', 'LOGO_TOO_LARGE')
   const requestedTheme = req.body.themeColors || {}
   const themeColors = Object.fromEntries(Object.entries(defaultThemeColors).map(([key, fallback]) => [key, isHexColor(requestedTheme[key]) ? requestedTheme[key] : fallback]))
-  const settings = await SiteSettings.findOneAndUpdate(
-    { key: 'primary' },
-    { $set: { key: 'primary', siteName: String(req.body.siteName || 'County Showgrounds').trim().slice(0, 120), logoUrl, supportPhone: String(req.body.supportPhone || '').trim().slice(0, 30), themeColors, updatedBy: req.admin._id } },
-    { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
-  ).lean()
-  res.json({ settings })
+  const settings = await SiteSettings.findOne({ key: 'primary' }) || new SiteSettings({ key: 'primary' })
+  settings.siteName = siteName || 'County Showgrounds'
+  settings.logoUrl = logoUrl
+  settings.supportPhone = String(req.body.supportPhone ?? '').trim().slice(0, 30)
+  settings.themeColors = themeColors
+  settings.updatedBy = req.admin._id
+  await settings.save()
+  res.json({ settings: settings.toObject() })
 }))
 
 app.use((error, req, res, next) => {

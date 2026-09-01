@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MapContainer, Marker, Popup, Rectangle, TileLayer, useMap } from 'react-leaflet'
+import { ImageOverlay, MapContainer, Marker, Polygon, Popup, Rectangle, TileLayer, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { ArrowLeft, ArrowRight, Check, CircleHelp, Clock3, Download, Leaf, MapPin, MessageSquare, RefreshCw, ScanLine, Send, Smartphone, Store, Ticket, Video, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, CircleAlert, CircleHelp, Clock3, Download, Leaf, MapPin, MessageSquare, RefreshCw, ScanLine, Send, Smartphone, Store, Ticket, Video, X, XCircle } from 'lucide-react'
 import { jsPDF } from 'jspdf'
 import QRCode from 'qrcode'
 import { api } from './api'
@@ -133,6 +133,20 @@ function metersToLatLng(lat, lng, north, east) {
   ]
 }
 
+const plotStatusPaint = {
+  available: { color: '#4c7a5d', fillColor: '#e4eee3' },
+  reserved: { color: '#b98a3e', fillColor: '#f3e7d2' },
+  taken: { color: '#8b8b82', fillColor: '#eaeae6' }
+}
+
+// GeoJSON stores [longitude, latitude]; Leaflet wants [latitude, longitude].
+function boundaryToLatLng(boundary) {
+  const ring = boundary?.coordinates?.[0]
+  if (!Array.isArray(ring) || ring.length < 4) return null
+  const points = ring.slice(0, -1).map(([lng, lat]) => [lat, lng])
+  return points.length >= 3 ? points : null
+}
+
 function PlotMap({ showground, selectedPlot, onSelect }) {
   const allPoints = [[showground.lat, showground.lng]]
   const road = [
@@ -140,28 +154,39 @@ function PlotMap({ showground, selectedPlot, onSelect }) {
     metersToLatLng(showground.lat, showground.lng, -20, 25)
   ]
   allPoints.push(...road)
+  const sitePlan = showground.sitePlan
+  const sitePlanBounds = sitePlan?.bounds && [[sitePlan.bounds.south, sitePlan.bounds.west], [sitePlan.bounds.north, sitePlan.bounds.east]]
   return (
     <MapContainer className="site-map" center={[showground.lat, showground.lng]} zoom={17} scrollWheelZoom={false}>
       <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={20} />
+      {sitePlanBounds && <ImageOverlay url={sitePlan.imageUrl} bounds={sitePlanBounds} opacity={sitePlan.opacity ?? 0.85} />}
       <Rectangle bounds={[road[0], road[1]]} pathOptions={{ color: '#d8d2c0', weight: 9, opacity: 0.95, fill: false }} />
       {showground.plots.map((plot, index) => {
-        const [width, height] = String(plot.size || '3x3m').replace('m', '').split('x').map(Number)
+        const paint = plotStatusPaint[plot.status] || plotStatusPaint.available
+        const shared = {
+          className: `plot-rect ${plot.status} ${plot.id === selectedPlot?.id ? 'selected' : ''}`,
+          color: paint.color,
+          fillColor: paint.fillColor,
+          weight: plot.id === selectedPlot?.id ? 3 : 1,
+          fillOpacity: 0.72
+        }
+        const eventHandlers = { click: () => onSelect(plot) }
+        const digitized = boundaryToLatLng(plot.boundary)
+        if (digitized) {
+          allPoints.push(...digitized)
+          return (
+            <Polygon key={plot.id} positions={digitized} pathOptions={shared} eventHandlers={eventHandlers}>
+              <Popup><strong>Plot {plot.id}</strong><br />{formatMoney(plot.price)} · {plot.status}</Popup>
+            </Polygon>
+          )
+        }
+        // No digitized boundary yet: fall back to an approximate rectangle
+        // so the plot is still visible and clickable on the map.
         const sw = metersToLatLng(showground.lat, showground.lng, plot.offsetN ?? [6, 6, -12, -12][index % 4], plot.offsetE ?? [-34, -27, -34, 0][index % 4])
-        const ne = metersToLatLng(showground.lat, showground.lng, (plot.offsetN ?? [6, 6, -12, -12][index % 4]) + height, (plot.offsetE ?? [-34, -27, -34, 0][index % 4]) + width)
+        const ne = metersToLatLng(showground.lat, showground.lng, (plot.offsetN ?? [6, 6, -12, -12][index % 4]) + height(plot), (plot.offsetE ?? [-34, -27, -34, 0][index % 4]) + width(plot))
         allPoints.push(sw, ne)
         return (
-          <Rectangle
-            key={plot.id}
-            bounds={[sw, ne]}
-            pathOptions={{
-              className: `plot-rect ${plot.status} ${plot.id === selectedPlot?.id ? 'selected' : ''}`,
-              color: plot.status === 'available' ? '#4c7a5d' : plot.status === 'reserved' ? '#b98a3e' : '#8b8b82',
-              fillColor: plot.status === 'available' ? '#e4eee3' : plot.status === 'reserved' ? '#f3e7d2' : '#eaeae6',
-              weight: plot.id === selectedPlot?.id ? 3 : 1,
-              fillOpacity: 0.72
-            }}
-            eventHandlers={{ click: () => onSelect(plot) }}
-          >
+          <Rectangle key={plot.id} bounds={[sw, ne]} pathOptions={shared} eventHandlers={eventHandlers}>
             <Popup><strong>Plot {plot.id}</strong><br />{formatMoney(plot.price)} · {plot.status}</Popup>
           </Rectangle>
         )
@@ -169,6 +194,13 @@ function PlotMap({ showground, selectedPlot, onSelect }) {
       <FitMap points={allPoints} maxZoom={18} />
     </MapContainer>
   )
+}
+
+function width(plot) {
+  return Number(String(plot.size || '3x3m').replace('m', '').split('x')[0]) || 3
+}
+function height(plot) {
+  return Number(String(plot.size || '3x3m').replace('m', '').split('x')[1]) || 3
 }
 
 function Stepper({ current }) {
@@ -186,7 +218,8 @@ function Stepper({ current }) {
 
 function StatusPill({ status }) {
   const label = status === 'available' ? 'Available' : status === 'reserved' ? 'Reserved' : status === 'taken' ? 'Taken' : status
-  return <span className={`status-pill ${status}`}><i />{label}</span>
+  const StatusIcon = status === 'available' ? CheckCircle2 : status === 'reserved' ? Clock3 : XCircle
+  return <span className={`status-pill ${status}`}><StatusIcon size={13} strokeWidth={2.2} aria-hidden="true" />{label}</span>
 }
 
 function TrafficBars({ traffic }) {
@@ -605,10 +638,10 @@ function PublicApp() {
           <div className="top-actions"><div className="brand-logo" aria-label={`${siteSettings.siteName || 'County Showgrounds'} logo`}>{siteSettings.logoUrl ? <img src={siteSettings.logoUrl} alt="" /> : <Leaf size={39} strokeWidth={1.4} />}</div></div>
         </header>
         <Stepper current={currentStep} />
-        {notice && <div className={`toast ${notice.tone}`}><span className="toast-dot" />{notice.message}</div>}
+        {notice && <div className={`toast ${notice.tone}`}>{notice.tone === 'error' ? <CircleAlert className="toast-icon" size={16} /> : notice.tone === 'warning' ? <CircleAlert className="toast-icon" size={16} /> : <CheckCircle2 className="toast-icon" size={16} />}{notice.message}</div>}
         {selectedShowground && view !== 'showground' && (
           <div className="top-showground-bar">
-            <span><strong>{selectedShowground.name}</strong> · {selectedShowground.county} {season && <span className={`season-status ${season.active ? 'open' : 'closed'}`}><i />{season.label} · {season.countdown}</span>}</span>
+            <span><strong>{selectedShowground.name}</strong> · {selectedShowground.county} {season && <span className={`season-status ${season.active ? 'open' : 'closed'}`}>{season.active ? <Clock3 size={12} strokeWidth={2.2} /> : <CircleAlert size={12} strokeWidth={2.2} />}{season.label} · {season.countdown}</span>}</span>
             <button onClick={() => { setSelectedPlot(null); setView('showground') }}>Change showground</button>
           </div>
         )}
@@ -629,7 +662,7 @@ function PublicApp() {
                     <div className="county">{showground.county}</div>
                     <h3>{showground.name}</h3>
                     <p className="muted">{available} of {showground.plots.length} plots available</p>
-                    <span className={`season-status ${open.active ? 'open' : 'closed'}`}><i />{open.active ? 'Closes in' : 'Opens in'} {open.countdown}</span>
+                    <span className={`season-status ${open.active ? 'open' : 'closed'}`}>{open.active ? <Clock3 size={12} strokeWidth={2.2} /> : <CircleAlert size={12} strokeWidth={2.2} />}{open.active ? 'Closes in' : 'Opens in'} {open.countdown}</span>
                   </button>
                 )
               })}

@@ -33,6 +33,10 @@ Admin routes require `Authorization: Bearer <session-token>`. Tokens are issued 
 - `POST /api/admin/showgrounds/:showgroundId/plots`
 - `PUT /api/admin/showgrounds/:showgroundId/plots/:plotId`
 - `DELETE /api/admin/showgrounds/:showgroundId/plots/:plotId`
+- `PUT /api/admin/showgrounds/:showgroundId/plots/:plotId/boundary` — save (or, with `{"boundary": null}`, clear) one plot's digitized polygon. Returns `{ showground, overlaps }`, where `overlaps` lists any other plot IDs whose boundary intersects this one.
+- `POST /api/admin/showgrounds/:showgroundId/geojson` — bulk-import boundaries from a GeoJSON file. Body: `{ "geojson": <FeatureCollection> }`. Each `Polygon` feature is matched to an existing plot by `properties.id` (or `properties.plotId`). Returns `{ showground, matched, unmatched, overlaps }`.
+- `PUT /api/admin/showgrounds/:showgroundId/site-plan` — set the georeferenced site-plan image used as a tracing guide. Body: `{ "imageUrl": "data:image/...", "bounds": { "south": -1.293, "west": 36.821, "north": -1.291, "east": 36.823 }, "opacity": 0.85 }`.
+- `DELETE /api/admin/showgrounds/:showgroundId/site-plan`
 - `GET /api/admin/managers`
 - `POST /api/admin/managers`
 - `PUT /api/admin/managers/:managerId`
@@ -66,6 +70,34 @@ The primary `admin` role has full CRUD access to showgrounds, plots, managers, v
   "otpToken": "verified-session-token"
 }
 ```
+
+## Plot boundary format
+
+Each plot may carry a digitized `boundary` — a single-ring GeoJSON `Polygon` with `[longitude, latitude]` coordinate pairs, closed (first point repeated as the last):
+
+```json
+{
+  "id": "A-01",
+  "category": "Standard stall",
+  "size": "3x3m",
+  "price": 25000,
+  "status": "available",
+  "boundary": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [36.8219, -1.2921],
+        [36.8222, -1.2921],
+        [36.8222, -1.2924],
+        [36.8219, -1.2924],
+        [36.8219, -1.2921]
+      ]
+    ]
+  }
+}
+```
+
+Plots without a `boundary` still render using the legacy `offsetN`/`offsetE` approximation. See the "Digitizing plot boundaries" section of the [README](../README.md) for the recommended admin workflow.
 
 ## Error format
 
