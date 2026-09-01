@@ -15,6 +15,14 @@ Required:
 - `CLIENT_ORIGIN`
 - `DEMO_MODE=false`
 
+Set `CLIENT_ORIGIN` to the exact public URL of the deployed frontend, without a path. For example:
+
+```text
+CLIENT_ORIGIN=https://county-plot-platform.vercel.app
+```
+
+Multiple frontend URLs can be separated with commas. After changing this variable, manually redeploy the Render service. The API accepts origins with or without a trailing slash.
+
 Daraja:
 
 - `MPESA_ENV=sandbox` or `live`

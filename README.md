@@ -42,6 +42,21 @@ Open `http://localhost:5173`.
 
 Open `http://localhost:5173/admin` for the operations workspace. In demo mode the initial credentials come from `ADMIN_EMAIL` and `ADMIN_PASSWORD` (defaults are shown in `server/.env.example`); change them before production. The primary admin can create manager accounts, assign them one or more showgrounds, and remove or reassign them later. Forgot-password links are logged and shown in the demo UI when no Brevo key is configured.
 
+### Adding managers from the database (last resort)
+
+If the admin UI is unavailable, the primary admin account is locked out, or you're scripting environment setup, manager accounts can be created, updated, or removed directly against MongoDB with the same rules the API enforces:
+
+```bash
+cd server
+npm run manager -- list-showgrounds
+npm run manager -- add --name "Jane Doe" --email jane@example.com --password "Secret123" --showgrounds kisumu,mombasa
+npm run manager -- list
+npm run manager -- update --email jane@example.com --showgrounds kisumu
+npm run manager -- remove --email jane@example.com
+```
+
+It connects using the same `MONGODB_URI` as the API, rejects the primary admin's email, requires at least one real showground ID, and hashes passwords identically to the web UI — so accounts made this way sign in normally. Run `npm run manager -- --help` for the full command list.
+
 The default local configuration uses `DEMO_MODE=true`. In that mode OTP verification accepts the code displayed by the backend response, and a simulated M-Pesa callback confirms the booking after a short delay. This is deliberate: it makes the application testable without pretending that a payment has happened.
 
 ## Deployment

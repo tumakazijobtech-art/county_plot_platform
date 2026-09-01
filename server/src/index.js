@@ -9,18 +9,22 @@ import { config, assertProductionConfig } from './config.js'
 import { AdminSession, AdminUser, Booking, Inquiry, Otp, PasswordReset, Payment, Showground, SiteSettings, Visitor } from './models.js'
 import { initiateStkPush } from './providers/daraja.js'
 import { sendSms } from './providers/talksasa.js'
+import { sha256, passwordHash, passwordMatches } from './auth.js'
 
 const app = express()
 const phonePattern = /^(?:\+254|0)(?:7|1)\d{8}$/
 const managerEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const otpSecret = process.env.OTP_SECRET || 'county-plot-hub-local-otp-secret'
+const normalizeOrigin = (value = '') => String(value).trim().replace(/\/+$/, '')
+const allowedOrigins = config.clientOrigin.split(',').map(normalizeOrigin).filter(Boolean)
 
 app.set('trust proxy', 1)
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || config.clientOrigin.split(',').map((item) => item.trim()).includes(origin) || config.clientOrigin === '*') return callback(null, true)
-    return callback(new Error('Origin is not allowed by the API'))
+    const requestOrigin = normalizeOrigin(origin)
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(requestOrigin)) return callback(null, true)
+    return callback(new Error(`Origin is not allowed by the API: ${origin}`))
   }
 }))
 // 6mb accommodates a base64-encoded site-plan image upload (see the
@@ -31,33 +35,19 @@ app.use('/api', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'd
 
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)
 const httpError = (status, message, code = 'REQUEST_ERROR') => Object.assign(new Error(message), { status, code })
-const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex')
 const newToken = () => crypto.randomBytes(24).toString('base64url')
 const cleanPhone = (value = '') => value.replace(/\s+/g, '')
 const validPhone = (value) => phonePattern.test(cleanPhone(value))
 const phoneForMpesa = (value) => cleanPhone(value).replace(/^\+/, '')
 const phoneForWhatsApp = (value) => cleanPhone(String(value || '')).replace(/^\+/, '').replace(/^0/, '254')
 const cleanEmail = (value = '') => String(value).trim().toLowerCase()
-const passwordHash = (password, salt = crypto.randomBytes(16).toString('hex')) => new Promise((resolve, reject) => {
-  crypto.scrypt(String(password), salt, 64, (error, derivedKey) => {
-    if (error) return reject(error)
-    resolve(`${salt}:${derivedKey.toString('hex')}`)
-  })
-})
-const passwordMatches = async (password, storedHash) => {
-  const [salt, expected] = String(storedHash || '').split(':')
-  if (!salt || !expected) return false
-  const actual = await passwordHash(password, salt)
-  const actualBuffer = Buffer.from(actual.split(':')[1], 'hex')
-  const expectedBuffer = Buffer.from(expected, 'hex')
-  return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer)
-}
 
 const publicAdmin = (admin) => ({ id: admin._id.toString(), email: admin.email, name: admin.name, role: admin.role, showgroundIds: Array.isArray(admin.showgroundIds) ? admin.showgroundIds : [] })
 const defaultThemeColors = { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' }
 const defaultPublicSettings = { key: 'primary', siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: defaultThemeColors }
 const isHexColor = (value) => /^#[0-9a-fA-F]{6}$/.test(String(value || ''))
 const isSuperAdmin = (admin) => admin?.role === 'admin'
+const managerFilter = () => ({ role: 'manager', email: { $ne: cleanEmail(config.admin.email) } })
 const groundScope = (admin) => isSuperAdmin(admin) ? {} : { id: { $in: admin?.showgroundIds || [] } }
 const bookingScope = (admin) => isSuperAdmin(admin) ? {} : { showgroundId: { $in: admin?.showgroundIds || [] } }
 const visitorScope = (admin) => isSuperAdmin(admin) ? {} : { showgroundId: { $in: admin?.showgroundIds || [] } }
@@ -177,7 +167,16 @@ async function sendPasswordResetEmail(admin, resetUrl) {
 async function ensureAdminUser() {
   const email = cleanEmail(config.admin.email)
   const existing = await AdminUser.findOne({ email })
-  if (existing) return existing
+  if (existing) {
+    if (existing.role !== 'admin' || (Array.isArray(existing.showgroundIds) && existing.showgroundIds.length)) {
+      existing.role = 'admin'
+      existing.showgroundIds = []
+      await existing.save()
+      await AdminSession.deleteMany({ adminId: existing._id })
+      console.log(`Repaired primary admin account ${email}.`)
+    }
+    return existing
+  }
   const created = await AdminUser.create({ email, name: config.admin.name, passwordHash: await passwordHash(config.admin.password), role: 'admin' })
   console.log(`Created initial admin account ${email}. Change the password after first login.`)
   return created
@@ -342,7 +341,7 @@ app.get('/api/admin/auth/me', requireAdmin, asyncRoute(async (req, res) => {
 }))
 
 app.get('/api/admin/managers', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
-  const managers = await AdminUser.find({ role: 'manager' }).select('-passwordHash').sort({ name: 1 }).lean()
+  const managers = await AdminUser.find(managerFilter()).select('-passwordHash').sort({ name: 1 }).lean()
   res.json({ managers: managers.map(publicAdmin) })
 }))
 
@@ -357,6 +356,7 @@ app.post('/api/admin/managers', requireAdmin, requireSuperAdmin, asyncRoute(asyn
   if (password.length < 8) validationErrors.push('a password of at least 8 characters')
   if (!showgroundIds.length) validationErrors.push('at least one assigned showground')
   if (validationErrors.length) throw httpError(400, `Please provide ${validationErrors.join(', ')}.`, 'VALIDATION_ERROR')
+  if (email === cleanEmail(config.admin.email)) throw httpError(409, 'That email is reserved for the primary admin login. Use a different email for this manager.', 'RESERVED_EMAIL')
   const validGrounds = await Showground.countDocuments({ id: { $in: showgroundIds } })
   if (validGrounds !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
   if (await AdminUser.exists({ email })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
@@ -366,7 +366,7 @@ app.post('/api/admin/managers', requireAdmin, requireSuperAdmin, asyncRoute(asyn
 
 app.put('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw httpError(400, 'Invalid manager ID.', 'INVALID_ID')
-  const manager = await AdminUser.findOne({ _id: req.params.id, role: 'manager' })
+  const manager = await AdminUser.findOne({ _id: req.params.id, ...managerFilter() })
   if (!manager) throw httpError(404, 'Manager not found.', 'NOT_FOUND')
   const email = cleanEmail(req.body.email)
   const name = String(req.body.name || '').trim()
@@ -376,6 +376,7 @@ app.put('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(a
   if (!managerEmailPattern.test(email)) validationErrors.push('a valid email')
   if (!showgroundIds.length) validationErrors.push('at least one assigned showground')
   if (validationErrors.length) throw httpError(400, `Please provide ${validationErrors.join(', ')}.`, 'VALIDATION_ERROR')
+  if (email === cleanEmail(config.admin.email)) throw httpError(409, 'That email is reserved for the primary admin login. Use a different email for this manager.', 'RESERVED_EMAIL')
   if (await AdminUser.exists({ email, _id: { $ne: manager._id } })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
   if (await Showground.countDocuments({ id: { $in: showgroundIds } }) !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
   const emailChanged = manager.email !== email
@@ -394,7 +395,7 @@ app.put('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(a
 
 app.delete('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw httpError(400, 'Invalid manager ID.', 'INVALID_ID')
-  const manager = await AdminUser.findOneAndDelete({ _id: req.params.id, role: 'manager' })
+  const manager = await AdminUser.findOneAndDelete({ _id: req.params.id, ...managerFilter() })
   if (!manager) throw httpError(404, 'Manager not found.', 'NOT_FOUND')
   await AdminSession.deleteMany({ adminId: manager._id })
   res.json({ ok: true, id: req.params.id })
@@ -631,6 +632,10 @@ app.delete('/api/admin/showgrounds/:id', requireAdmin, requireSuperAdmin, asyncR
   const deleted = await Showground.findOneAndDelete({ id: req.params.id })
   if (!deleted) throw httpError(404, 'Showground not found.', 'NOT_FOUND')
   await Visitor.deleteMany({ showgroundId: req.params.id })
+  // Managers previously assigned to this showground must have the stale ID
+  // removed, otherwise their assignment count and checkbox state silently
+  // drift out of sync with what is actually shown in the admin UI.
+  await AdminUser.updateMany({ showgroundIds: req.params.id }, { $pull: { showgroundIds: req.params.id } })
   res.json({ ok: true, id: req.params.id })
 }))
 

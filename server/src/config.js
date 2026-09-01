@@ -42,6 +42,7 @@ export function assertProductionConfig() {
   if (config.demoMode) return
   const missing = [
     ['MONGODB_URI', config.mongoUri],
+    ['CLIENT_ORIGIN', process.env.CLIENT_ORIGIN],
     ['MPESA_CONSUMER_KEY', config.mpesa.consumerKey],
     ['MPESA_CONSUMER_SECRET', config.mpesa.consumerSecret],
     ['MPESA_SHORT_CODE', config.mpesa.shortCode],
