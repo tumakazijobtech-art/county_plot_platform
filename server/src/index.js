@@ -12,6 +12,7 @@ import { sendSms } from './providers/talksasa.js'
 
 const app = express()
 const phonePattern = /^(?:\+254|0)(?:7|1)\d{8}$/
+const managerEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const otpSecret = process.env.OTP_SECRET || 'county-plot-hub-local-otp-secret'
 
 app.set('trust proxy', 1)
@@ -350,7 +351,12 @@ app.post('/api/admin/managers', requireAdmin, requireSuperAdmin, asyncRoute(asyn
   const name = String(req.body.name || '').trim()
   const password = String(req.body.password || '')
   const showgroundIds = Array.isArray(req.body.showgroundIds) ? [...new Set(req.body.showgroundIds.map((id) => String(id).trim()).filter(Boolean))] : []
-  if (!email || !email.includes('@') || !name || password.length < 8 || !showgroundIds.length) throw httpError(400, 'Name, valid email, password, and at least one showground are required.', 'VALIDATION_ERROR')
+  const validationErrors = []
+  if (!name) validationErrors.push('a full name')
+  if (!managerEmailPattern.test(email)) validationErrors.push('a valid email')
+  if (password.length < 8) validationErrors.push('a password of at least 8 characters')
+  if (!showgroundIds.length) validationErrors.push('at least one assigned showground')
+  if (validationErrors.length) throw httpError(400, `Please provide ${validationErrors.join(', ')}.`, 'VALIDATION_ERROR')
   const validGrounds = await Showground.countDocuments({ id: { $in: showgroundIds } })
   if (validGrounds !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
   if (await AdminUser.exists({ email })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
@@ -365,7 +371,11 @@ app.put('/api/admin/managers/:id', requireAdmin, requireSuperAdmin, asyncRoute(a
   const email = cleanEmail(req.body.email)
   const name = String(req.body.name || '').trim()
   const showgroundIds = Array.isArray(req.body.showgroundIds) ? [...new Set(req.body.showgroundIds.map((id) => String(id).trim()).filter(Boolean))] : []
-  if (!email || !email.includes('@') || !name || !showgroundIds.length) throw httpError(400, 'Name, valid email, and at least one showground are required.', 'VALIDATION_ERROR')
+  const validationErrors = []
+  if (!name) validationErrors.push('a full name')
+  if (!managerEmailPattern.test(email)) validationErrors.push('a valid email')
+  if (!showgroundIds.length) validationErrors.push('at least one assigned showground')
+  if (validationErrors.length) throw httpError(400, `Please provide ${validationErrors.join(', ')}.`, 'VALIDATION_ERROR')
   if (await AdminUser.exists({ email, _id: { $ne: manager._id } })) throw httpError(409, 'An account with that email already exists.', 'DUPLICATE_EMAIL')
   if (await Showground.countDocuments({ id: { $in: showgroundIds } }) !== showgroundIds.length) throw httpError(400, 'One or more assigned showgrounds do not exist.', 'INVALID_ASSIGNMENT')
   const emailChanged = manager.email !== email

@@ -6,6 +6,7 @@ import PlotBoundaryEditor from './PlotBoundaryEditor'
 const defaultThemeColors = { primary: '#2b4034', accent: '#4c7a5d', background: '#f2f4ee', surface: '#ffffff', text: '#232a22' }
 const defaultSettings = { siteName: 'County Showgrounds', logoUrl: '/county-showgrounds-logo.png', supportPhone: '', themeColors: defaultThemeColors }
 const emptyManagerForm = { id: '', name: '', email: '', password: '', showgroundIds: [] }
+const managerEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const brandSettingsStorageKey = 'county-plot-hub-brand-settings'
 const mergeSettings = (incoming = {}) => ({
   ...defaultSettings,
@@ -431,10 +432,18 @@ function AdminPortal() {
       name: String(managerForm.name || '').trim(),
       email: String(managerForm.email || '').trim().toLowerCase(),
       password: String(managerForm.password || ''),
-      showgroundIds: Array.isArray(managerForm.showgroundIds) ? [...new Set(managerForm.showgroundIds.filter(Boolean))] : []
+      showgroundIds: Array.isArray(managerForm.showgroundIds)
+        ? [...new Set(managerForm.showgroundIds.map((id) => String(id).trim()).filter(Boolean))]
+        : []
     }
-    if (!payload.name || !payload.email || (!managerForm.id && payload.password.length < 8) || !payload.showgroundIds.length) {
-      flash(managerForm.id ? 'Name, email, and at least one showground are required.' : 'Name, email, password, and at least one showground are required.', 'warning')
+    const validationErrors = []
+    if (!payload.name) validationErrors.push('a full name')
+    if (!managerEmailPattern.test(payload.email)) validationErrors.push('a valid email')
+    if (!managerForm.id && payload.password.length < 8) validationErrors.push('a password of at least 8 characters')
+    if (managerForm.id && payload.password && payload.password.length < 8) validationErrors.push('a new password of at least 8 characters')
+    if (!payload.showgroundIds.length) validationErrors.push('at least one assigned showground')
+    if (validationErrors.length) {
+      flash(`Please provide ${validationErrors.join(', ')}.`, 'warning')
       return
     }
     try {
@@ -562,7 +571,7 @@ function AdminPortal() {
              </div>
              <div className="admin-panel">
                <div className="panel-heading"><div><span className="eyebrow">{managerForm.id ? 'Edit manager' : 'New manager'}</span><h2>{managerForm.id ? 'Update access' : 'Add a manager'}</h2></div>{managerForm.id && <button type="button" className="back-button" onClick={() => setManagerForm(emptyManagerForm)}><X size={15} /> Clear</button>}</div>
-               <form className="admin-auth-form manager-form" onSubmit={saveManager}><label className="field">Full name<input value={managerForm.name} onChange={(event) => setManagerForm({ ...managerForm, name: event.target.value })} autoComplete="name" required /></label><label className="field">Email<input type="email" value={managerForm.email} onChange={(event) => setManagerForm({ ...managerForm, email: event.target.value })} autoComplete="email" required /></label><label className="field">{managerForm.id ? 'New password (optional)' : 'Temporary password'}<input type="password" value={managerForm.password} onChange={(event) => setManagerForm({ ...managerForm, password: event.target.value })} minLength="8" required={!managerForm.id} autoComplete={managerForm.id ? 'new-password' : 'new-password'} /></label><fieldset className="assignment-field"><legend>Assigned showgrounds</legend>{showgrounds.length ? showgrounds.map((ground) => <label key={ground.id}><input type="checkbox" checked={managerForm.showgroundIds.includes(ground.id)} onChange={(event) => setManagerForm({ ...managerForm, showgroundIds: event.target.checked ? [...managerForm.showgroundIds, ground.id] : managerForm.showgroundIds.filter((id) => id !== ground.id) })} /> {ground.name}</label>) : <span className="muted">Create a showground before adding a manager.</span>}</fieldset><button className="btn block" disabled={busy || !showgrounds.length}>{managerForm.id ? 'Save manager' : 'Create manager'} <UserPlus size={15} /></button></form>
+               <form className="admin-auth-form manager-form" onSubmit={saveManager}><label className="field">Full name<input value={managerForm.name} onChange={(event) => setManagerForm({ ...managerForm, name: event.target.value })} autoComplete="name" required /></label><label className="field">Email<input type="email" value={managerForm.email} onChange={(event) => setManagerForm({ ...managerForm, email: event.target.value })} autoComplete="email" required /></label><label className="field">{managerForm.id ? 'New password (optional)' : 'Temporary password'}<input type="password" value={managerForm.password} onChange={(event) => setManagerForm({ ...managerForm, password: event.target.value })} minLength="8" required={!managerForm.id} autoComplete="new-password" /></label><fieldset className="assignment-field"><legend>Assigned showgrounds</legend>{showgrounds.length ? showgrounds.map((ground) => { const groundId = String(ground.id || '').trim(); const assignedIds = Array.isArray(managerForm.showgroundIds) ? managerForm.showgroundIds.map((id) => String(id)) : []; return <label key={groundId}><input type="checkbox" checked={assignedIds.includes(groundId)} onChange={(event) => setManagerForm((current) => { const currentIds = Array.isArray(current.showgroundIds) ? current.showgroundIds.map((id) => String(id)) : []; return { ...current, showgroundIds: event.target.checked ? [...new Set([...currentIds, groundId])] : currentIds.filter((id) => id !== groundId) } })} /> {ground.name}</label> }) : <span className="muted">Create a showground before adding a manager.</span>}</fieldset><button className="btn block" disabled={busy || !showgrounds.length}>{managerForm.id ? 'Save manager' : 'Create manager'} <UserPlus size={15} /></button></form>
              </div>
            </section>
          )}
